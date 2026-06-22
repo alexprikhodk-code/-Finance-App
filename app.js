@@ -1,0 +1,754 @@
+/* ============================================================
+   ГРОШІ — логіка застосунку
+   ============================================================ */
+
+const STORE = {
+  tx: 'groshi_tx_v1',
+  cats: 'groshi_custom_cats_v1',
+  pin: 'groshi_pin_v1',
+  meta: 'groshi_meta_v1',
+};
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+/* ---------- State ---------- */
+let transactions = [];
+let customCats = { expense: [], income: [] };
+let state = {
+  addType: 'expense',
+  addAmount: '0',
+  addCat: null,
+  analyticsPeriod: 'month',
+  analyticsIO: 'expense',
+  customFrom: null,
+  customTo: null,
+  calMonth: new Date().getFullYear() * 12 + new Date().getMonth(),
+  calSelectedDay: null,
+};
+
+/* ---------- Storage ---------- */
+function load() {
+  try { transactions = JSON.parse(localStorage.getItem(STORE.tx)) || []; } catch { transactions = []; }
+  try { customCats = JSON.parse(localStorage.getItem(STORE.cats)) || { expense: [], income: [] }; } catch {}
+}
+function saveTx() { localStorage.setItem(STORE.tx, JSON.stringify(transactions)); }
+function saveCats() { localStorage.setItem(STORE.cats, JSON.stringify(customCats)); }
+
+function allCats(type) {
+  return [...DEFAULT_CATEGORIES[type], ...(customCats[type] || [])];
+}
+function findCat(type, id) {
+  return allCats(type).find(c => c.id === id) || { id, name: id, emoji: '🎯', color: '#8c90b8' };
+}
+
+/* ---------- Formatting ---------- */
+const fmt = (n) => {
+  const neg = n < 0;
+  const v = Math.abs(Math.round(n * 100) / 100);
+  const s = v.toLocaleString('uk-UA', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  return (neg ? '−' : '') + s + ' ₴';
+};
+const fmtShort = (n) => {
+  const a = Math.abs(n);
+  if (a >= 1e6) return (n/1e6).toFixed(1).replace('.0','') + 'М ₴';
+  if (a >= 1e3) return (n/1e3).toFixed(1).replace('.0','') + 'К ₴';
+  return Math.round(n) + ' ₴';
+};
+const MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+const MONTHS_GEN = ['січня','лютого','березня','квітня','травня','червня','липня','серпня','вересня','жовтня','листопада','грудня'];
+const DOW = ['Пн','Вт','Ср','Чт','Пт','Сб','Нд'];
+
+function ymd(d) {
+  const x = new Date(d);
+  return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`;
+}
+function parseYmd(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
+function todayYmd() { return ymd(new Date()); }
+
+/* ============================================================
+   PIN LOCK
+   ============================================================ */
+const PIN = {
+  buffer: '',
+  mode: 'check',   // 'check' | 'set' | 'confirm' | 'change-old' | 'change-new' | 'change-confirm'
+  firstEntry: '',
+  onDone: null,
+
+  init() {
+    const has = !!localStorage.getItem(STORE.pin);
+    this.show(has ? 'check' : 'set');
+  },
+  hashed(p) { // легке "хешування" — не криптографія, просто щоб не зберігати відкрито
+    let h = 0; for (const c of (p + 'groshi-salt')) h = (h * 31 + c.charCodeAt(0)) | 0;
+    return String(h);
+  },
+  show(mode, onDone) {
+    this.mode = mode; this.buffer = ''; this.firstEntry = ''; this.onDone = onDone || null;
+    $('#lockScreen').classList.remove('hidden');
+    this.render();
+    this.updateText();
+  },
+  updateText() {
+    const map = {
+      'check':        ['Введіть PIN-код', 'Доступ до ваших фінансів'],
+      'set':          ['Створіть PIN-код', 'Запам\'ятайте його для входу'],
+      'confirm':      ['Повторіть PIN-код', 'Підтвердіть новий код'],
+      'change-old':   ['Поточний PIN-код', 'Введіть старий код'],
+      'change-new':   ['Новий PIN-код', 'Придумайте новий код'],
+      'change-confirm':['Повторіть код', 'Підтвердіть новий код'],
+    };
+    const [t, s] = map[this.mode] || map.check;
+    $('#lockTitle').textContent = t; $('#lockSub').textContent = s;
+  },
+  render(err) {
+    const dots = $$('#pinDots .pin-dot');
+    dots.forEach((d, i) => d.classList.toggle('filled', i < this.buffer.length));
+    $('#pinDots').classList.toggle('error', !!err);
+    if (err) setTimeout(() => $('#pinDots').classList.remove('error'), 450);
+  },
+  press(key) {
+    if (key === 'del') { this.buffer = this.buffer.slice(0, -1); this.render(); return; }
+    if (this.buffer.length >= 4) return;
+    this.buffer += key;
+    this.render();
+    if (this.buffer.length === 4) setTimeout(() => this.complete(), 120);
+  },
+  complete() {
+    const entered = this.buffer;
+    switch (this.mode) {
+      case 'check':
+        if (this.hashed(entered) === localStorage.getItem(STORE.pin)) { this.unlock(); }
+        else { this.buffer = ''; this.render(true); }
+        break;
+      case 'set':
+      case 'change-new':
+        this.firstEntry = entered; this.buffer = '';
+        this.mode = (this.mode === 'set') ? 'confirm' : 'change-confirm';
+        this.updateText(); this.render();
+        break;
+      case 'confirm':
+      case 'change-confirm':
+        if (entered === this.firstEntry) {
+          localStorage.setItem(STORE.pin, this.hashed(entered));
+          if (this.mode === 'change-confirm') { this.hide(); toast('PIN-код змінено ✓'); if (this.onDone) this.onDone(); }
+          else this.unlock();
+        } else {
+          this.buffer = ''; this.mode = (this.mode === 'confirm') ? 'set' : 'change-new';
+          this.updateText(); this.render(true);
+          toast('Коди не збігаються');
+        }
+        break;
+      case 'change-old':
+        if (this.hashed(entered) === localStorage.getItem(STORE.pin)) {
+          this.buffer = ''; this.mode = 'change-new'; this.updateText(); this.render();
+        } else { this.buffer = ''; this.render(true); }
+        break;
+    }
+  },
+  unlock() { this.hide(); refreshAll(); },
+  hide() { $('#lockScreen').classList.add('hidden'); },
+};
+
+$('#pinPad').addEventListener('click', (e) => {
+  const b = e.target.closest('.pin-key'); if (!b || b.classList.contains('blank')) return;
+  PIN.press(b.dataset.act === 'del' ? 'del' : b.textContent.trim());
+});
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
+function goto(screen) {
+  $$('.screen').forEach(s => s.classList.remove('active'));
+  $('#screen-' + screen).classList.add('active');
+  $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.goto === screen));
+  window.scrollTo(0, 0);
+  if (screen === 'home') renderHome();
+  if (screen === 'calendar') renderCalendar();
+  if (screen === 'analytics') renderAnalytics();
+  if (screen === 'add') renderCategories();
+  if (screen === 'settings') renderStats();
+}
+document.body.addEventListener('click', (e) => {
+  const nav = e.target.closest('[data-goto]');
+  if (nav) goto(nav.dataset.goto);
+});
+
+/* ============================================================
+   HOME
+   ============================================================ */
+function showWisdom() {
+  const w = WISDOMS[Math.floor(Math.random() * WISDOMS.length)];
+  $('#wisdomText').textContent = w.t;
+  $('#wisdomAuthor').textContent = '— ' + w.a;
+}
+
+function renderHome() {
+  const now = new Date();
+  $('#todayLabel').textContent = `Сьогодні, ${now.getDate()} ${MONTHS_GEN[now.getMonth()]} ${now.getFullYear()}`;
+
+  const { from, to } = periodRange('month');
+  const tx = inRange(transactions, from, to);
+  const inc = sum(tx.filter(t => t.type === 'income'));
+  const exp = sum(tx.filter(t => t.type === 'expense'));
+
+  $('#balPeriodName').textContent = MONTHS[now.getMonth()].toLowerCase();
+  const bal = inc - exp;
+  const el = $('#balanceAmount');
+  el.textContent = fmt(bal);
+  el.className = 'amount ' + (bal >= 0 ? 'glow-green' : '');
+  el.style.color = bal >= 0 ? 'var(--income)' : 'var(--expense)';
+  $('#balPeriodRange').textContent = `${from.getDate()} – ${to.getDate()} ${MONTHS_GEN[now.getMonth()]}`;
+  $('#homeIncome').textContent = fmt(inc);
+  $('#homeExpense').textContent = fmt(exp);
+
+  const recent = [...transactions].sort((a,b) => (b.date+b.createdAt).localeCompare(a.date+a.createdAt)).slice(0, 8);
+  renderTxList($('#homeTxList'), recent);
+}
+
+function renderTxList(container, list) {
+  if (!list.length) {
+    container.innerHTML = `<div class="empty"><span class="big">🪙</span>Поки немає операцій.<br>Натисніть «+» щоб додати.</div>`;
+    return;
+  }
+  container.innerHTML = list.map(t => {
+    const c = findCat(t.type, t.category);
+    const d = parseYmd(t.date);
+    const meta = `${d.getDate()} ${MONTHS_GEN[d.getMonth()]}` + (t.note ? ` • ${esc(t.note)}` : '');
+    const src = t.source === 'receipt' ? '<span class="tx-src">чек</span>' : '';
+    return `<div class="tx-item" data-tx="${t.id}">
+      <div class="tx-icon" style="box-shadow:0 0 12px ${c.color}33;">${c.emoji}</div>
+      <div class="tx-mid">
+        <div class="tx-cat">${esc(c.name)}${src}</div>
+        <div class="tx-meta">${meta}</div>
+      </div>
+      <div class="tx-amt ${t.type === 'income' ? 'inc' : 'exp'}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount).replace('−','')}</div>
+    </div>`;
+  }).join('');
+  $$('.tx-item', container).forEach(item => {
+    item.addEventListener('click', () => openTxSheet(item.dataset.tx));
+  });
+}
+
+/* ============================================================
+   PERIODS
+   ============================================================ */
+function periodRange(period, ref = new Date()) {
+  const r = new Date(ref); r.setHours(0,0,0,0);
+  let from, to;
+  if (period === 'day') { from = new Date(r); to = new Date(r); }
+  else if (period === 'week') {
+    const dow = (r.getDay() + 6) % 7; // Пн=0
+    from = new Date(r); from.setDate(r.getDate() - dow);
+    to = new Date(from); to.setDate(from.getDate() + 6);
+  }
+  else if (period === 'month') { from = new Date(r.getFullYear(), r.getMonth(), 1); to = new Date(r.getFullYear(), r.getMonth()+1, 0); }
+  else if (period === 'year') { from = new Date(r.getFullYear(), 0, 1); to = new Date(r.getFullYear(), 11, 31); }
+  else if (period === 'all') { from = new Date(2000,0,1); to = new Date(2100,0,1); }
+  else if (period === 'custom') {
+    from = state.customFrom ? parseYmd(state.customFrom) : new Date(r.getFullYear(), r.getMonth(), 1);
+    to = state.customTo ? parseYmd(state.customTo) : new Date(r);
+  }
+  to.setHours(23,59,59,999);
+  return { from, to };
+}
+function prevPeriodRange(period) {
+  const { from, to } = periodRange(period);
+  if (period === 'all' || period === 'custom') {
+    const len = to - from;
+    return { from: new Date(from - len), to: new Date(from - 1) };
+  }
+  const ref = new Date(from);
+  if (period === 'day') ref.setDate(ref.getDate() - 1);
+  else if (period === 'week') ref.setDate(ref.getDate() - 7);
+  else if (period === 'month') ref.setMonth(ref.getMonth() - 1);
+  else if (period === 'year') ref.setFullYear(ref.getFullYear() - 1);
+  return periodRange(period, ref);
+}
+function inRange(list, from, to) {
+  const f = from.getTime(), t = to.getTime();
+  return list.filter(x => { const d = parseYmd(x.date).getTime(); return d >= f && d <= t; });
+}
+const sum = (list) => list.reduce((s, x) => s + x.amount, 0);
+
+/* ============================================================
+   ADD
+   ============================================================ */
+function renderCategories() {
+  const grid = $('#catGrid');
+  const cats = allCats(state.addType);
+  grid.innerHTML = cats.map(c =>
+    `<button class="cat-btn ${state.addCat === c.id ? 'active' : ''}" data-cat="${c.id}">
+      <span class="emoji">${c.emoji}</span><span>${esc(c.name)}</span>
+    </button>`).join('');
+  $$('.cat-btn', grid).forEach(b => b.addEventListener('click', () => {
+    state.addCat = b.dataset.cat;
+    renderCategories(); updateSaveBtn();
+  }));
+}
+function updateAmountDisplay() {
+  $('#amountValue').textContent = state.addAmount === '' ? '0' : state.addAmount.replace('.', ',');
+  updateSaveBtn();
+}
+function updateSaveBtn() {
+  const amt = parseFloat(state.addAmount.replace(',', '.')) || 0;
+  $('#saveTxBtn').disabled = !(amt > 0 && state.addCat);
+}
+$('#keypad').addEventListener('click', (e) => {
+  const k = e.target.closest('.key'); if (!k) return;
+  const v = k.dataset.k || k.textContent.trim();
+  if (v === 'del') { state.addAmount = state.addAmount.slice(0, -1); }
+  else if (v === '.' || v === ',') { if (!state.addAmount.includes('.')) state.addAmount += (state.addAmount === '' ? '0.' : '.'); }
+  else {
+    if (state.addAmount === '0') state.addAmount = '';
+    const dec = state.addAmount.split('.')[1];
+    if (dec && dec.length >= 2) return;
+    if (state.addAmount.replace('.','').length >= 9) return;
+    state.addAmount += v;
+  }
+  updateAmountDisplay();
+});
+$('#typeToggle').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.addType = b.dataset.type; state.addCat = null;
+  $$('#typeToggle button').forEach(x => x.classList.toggle('active', x === b));
+  renderCategories(); updateSaveBtn();
+});
+$('#saveTxBtn').addEventListener('click', () => {
+  const amt = parseFloat(state.addAmount.replace(',', '.')) || 0;
+  if (!(amt > 0 && state.addCat)) return;
+  transactions.push({
+    id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+    type: state.addType, amount: amt, category: state.addCat,
+    date: $('#addDate').value || todayYmd(),
+    note: $('#addNote').value.trim(), source: 'manual',
+    createdAt: new Date().toISOString(),
+  });
+  saveTx();
+  resetAddForm();
+  toast('Операцію збережено ✓');
+  goto('home');
+});
+function resetAddForm() {
+  state.addAmount = '0'; state.addCat = null; state.addType = 'expense';
+  $('#addNote').value = ''; $('#addDate').value = todayYmd();
+  $$('#typeToggle button').forEach(x => x.classList.toggle('active', x.dataset.type === 'expense'));
+  updateAmountDisplay(); renderCategories();
+}
+
+/* ============================================================
+   CALENDAR
+   ============================================================ */
+$$('[data-cal]').forEach(b => b.addEventListener('click', () => {
+  state.calMonth += parseInt(b.dataset.cal, 10);
+  state.calSelectedDay = null;
+  renderCalendar();
+}));
+function renderCalendar() {
+  const year = Math.floor(state.calMonth / 12);
+  const month = state.calMonth % 12;
+  $('#calMonthName').textContent = `${MONTHS[month]} ${year}`;
+
+  $('#calDow').innerHTML = DOW.map(d => `<div class="cal-dow">${d}</div>`).join('');
+
+  const first = new Date(year, month, 1);
+  const startPad = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const todayStr = todayYmd();
+
+  // агрегати по днях
+  const byDay = {};
+  transactions.forEach(t => {
+    const d = parseYmd(t.date);
+    if (d.getFullYear() === year && d.getMonth() === month) {
+      const day = d.getDate();
+      byDay[day] = byDay[day] || { inc: 0, exp: 0 };
+      byDay[day][t.type === 'income' ? 'inc' : 'exp'] += t.amount;
+    }
+  });
+
+  let cells = '';
+  for (let i = 0; i < startPad; i++) cells += `<div class="cal-day empty-cell"></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const ds = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const info = byDay[day];
+    const isToday = ds === todayStr;
+    const isSel = state.calSelectedDay === ds;
+    let markers = '';
+    if (info) {
+      markers = `<div class="markers">${info.inc ? '<span class="mk inc"></span>' : ''}${info.exp ? '<span class="mk exp"></span>' : ''}</div>`;
+    } else markers = '<div class="markers"></div>';
+    cells += `<div class="cal-day ${isToday?'today':''} ${isSel?'selected':''}" data-day="${ds}">${day}${markers}</div>`;
+  }
+  $('#calGrid').innerHTML = cells;
+
+  // підсумок місяця
+  const mtx = transactions.filter(t => { const d = parseYmd(t.date); return d.getFullYear()===year && d.getMonth()===month; });
+  const mi = sum(mtx.filter(t=>t.type==='income')), me = sum(mtx.filter(t=>t.type==='expense'));
+  $('#calSummary').innerHTML = `Доходи ${fmtShort(mi)} • Витрати ${fmtShort(me)}`;
+
+  $$('#calGrid .cal-day[data-day]').forEach(c => c.addEventListener('click', () => {
+    state.calSelectedDay = c.dataset.day;
+    renderCalendar();
+    renderCalDay();
+  }));
+  renderCalDay();
+}
+function renderCalDay() {
+  const title = $('#calDayTitle');
+  if (!state.calSelectedDay) { title.textContent = 'Оберіть день'; $('#calTxList').innerHTML = ''; return; }
+  const d = parseYmd(state.calSelectedDay);
+  const list = transactions.filter(t => t.date === state.calSelectedDay)
+    .sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const inc = sum(list.filter(t=>t.type==='income')), exp = sum(list.filter(t=>t.type==='expense'));
+  title.innerHTML = `${d.getDate()} ${MONTHS_GEN[d.getMonth()]} <span style="color:var(--txt-faint);font-weight:400;font-size:13px;">• +${fmtShort(inc)} / −${fmtShort(exp)}</span>`;
+  renderTxList($('#calTxList'), list);
+}
+
+/* ============================================================
+   ANALYTICS
+   ============================================================ */
+$('#periodBar').addEventListener('click', (e) => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  state.analyticsPeriod = c.dataset.period;
+  $$('#periodBar .chip').forEach(x => x.classList.toggle('active', x === c));
+  $('#customRangeCard').classList.toggle('hidden', c.dataset.period !== 'custom');
+  renderAnalytics();
+});
+$('#ioSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.analyticsIO = b.dataset.io;
+  $$('#ioSeg button').forEach(x => x.classList.toggle('active', x === b));
+  renderAnalytics();
+});
+['customFrom','customTo'].forEach(id => $('#'+id).addEventListener('change', () => {
+  state.customFrom = $('#customFrom').value; state.customTo = $('#customTo').value;
+  renderAnalytics();
+}));
+
+function renderAnalytics() {
+  const { from, to } = periodRange(state.analyticsPeriod);
+  const tx = inRange(transactions, from, to).filter(t => t.type === state.analyticsIO);
+  const total = sum(tx);
+
+  $('#donutLabel').textContent = state.analyticsIO === 'income' ? 'Доходи' : 'Витрати';
+  $('#donutTotal').textContent = fmtShort(total);
+
+  // group by category
+  const groups = {};
+  tx.forEach(t => { groups[t.category] = (groups[t.category] || 0) + t.amount; });
+  const arr = Object.entries(groups).map(([id, val]) => {
+    const c = findCat(state.analyticsIO, id);
+    return { ...c, val };
+  }).sort((a,b) => b.val - a.val);
+
+  drawDonut($('#donutCanvas'), arr, total);
+  renderLegend(arr, total);
+
+  // comparison
+  renderCompare(from, to);
+}
+
+function renderLegend(arr, total) {
+  const el = $('#donutLegend');
+  if (!arr.length) { el.innerHTML = `<div class="empty" style="padding:10px;">Немає даних за період</div>`; return; }
+  el.innerHTML = arr.map(c => {
+    const pct = total ? Math.round(c.val/total*100) : 0;
+    return `<div class="legend-row">
+      <span class="lg-dot" style="background:${c.color};box-shadow:0 0 8px ${c.color}99;"></span>
+      <span class="lg-name">${c.emoji} ${esc(c.name)}</span>
+      <span class="lg-val">${fmt(c.val)}</span>
+      <span class="lg-pct">${pct}%</span>
+    </div>`;
+  }).join('');
+}
+
+function renderCompare(from, to) {
+  const prev = prevPeriodRange(state.analyticsPeriod);
+  const curTx = inRange(transactions, from, to);
+  const prevTx = inRange(transactions, prev.from, prev.to);
+  const cur = sum(curTx.filter(t => t.type === state.analyticsIO));
+  const pre = sum(prevTx.filter(t => t.type === state.analyticsIO));
+
+  drawBars($('#barCanvas'), [
+    { label: 'Попередній', val: pre, color: '#565a82' },
+    { label: 'Поточний', val: cur, color: state.analyticsIO === 'income' ? '#3dff9e' : '#ff4d6d' },
+  ]);
+
+  let html = '';
+  if (pre === 0 && cur === 0) html = `<div class="empty" style="padding:8px;">Немає даних для порівняння</div>`;
+  else {
+    const diff = cur - pre;
+    const pct = pre ? Math.round(diff/pre*100) : 100;
+    const up = diff > 0;
+    const isExpense = state.analyticsIO === 'expense';
+    // для витрат зростання = погано (червоний), для доходів навпаки
+    const bad = (isExpense && up) || (!isExpense && !up && diff !== 0);
+    const cls = diff === 0 ? '' : (bad ? 'up' : 'down');
+    const arrow = diff === 0 ? '→' : (up ? '↑' : '↓');
+    html = `<div class="compare-stat ${cls}">${arrow} ${diff>=0?'+':'−'}${fmt(Math.abs(diff)).replace('−','')} (${pre?(diff>=0?'+':'−')+Math.abs(pct)+'%':'новий період'}) vs попередній</div>`;
+  }
+  $('#compareStats').innerHTML = html;
+}
+
+/* ---------- Canvas charts ---------- */
+function setupCanvas(canvas, h) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+function drawDonut(canvas, arr, total) {
+  const h = 240;
+  const { ctx, w } = setupCanvas(canvas, h);
+  const cx = w/2, cy = h/2, R = Math.min(w,h)/2 - 14, r = R * 0.62;
+  if (!total || !arr.length) {
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2); ctx.arc(cx, cy, r, 0, Math.PI*2, true);
+    ctx.fillStyle = 'rgba(255,255,255,.05)'; ctx.fill('evenodd'); return;
+  }
+  let a0 = -Math.PI/2;
+  arr.forEach(c => {
+    const frac = c.val/total;
+    const a1 = a0 + frac * Math.PI*2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, a0, a1);
+    ctx.arc(cx, cy, r, a1, a0, true);
+    ctx.closePath();
+    ctx.fillStyle = c.color;
+    ctx.shadowColor = c.color; ctx.shadowBlur = 12;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    a0 = a1 + 0.02;
+  });
+}
+function drawBars(canvas, data) {
+  const h = 200;
+  const { ctx, w } = setupCanvas(canvas, h);
+  const max = Math.max(...data.map(d => d.val), 1);
+  const pad = 40, gap = 40;
+  const bw = (w - pad*2 - gap*(data.length-1)) / data.length;
+  const baseY = h - 36;
+  data.forEach((d, i) => {
+    const x = pad + i*(bw+gap);
+    const bh = Math.max((d.val/max) * (baseY - 20), d.val > 0 ? 4 : 0);
+    const y = baseY - bh;
+    // bar
+    const grad = ctx.createLinearGradient(0, y, 0, baseY);
+    grad.addColorStop(0, d.color); grad.addColorStop(1, d.color + '40');
+    ctx.fillStyle = grad;
+    ctx.shadowColor = d.color; ctx.shadowBlur = 14;
+    roundRect(ctx, x, y, bw, bh, 10); ctx.fill();
+    ctx.shadowBlur = 0;
+    // value
+    ctx.fillStyle = '#eef1ff'; ctx.font = '600 13px -apple-system, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(fmtShort(d.val), x + bw/2, y - 8);
+    // label
+    ctx.fillStyle = '#8c90b8'; ctx.font = '12px -apple-system, sans-serif';
+    ctx.fillText(d.label, x + bw/2, baseY + 20);
+  });
+}
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, 0);
+  ctx.arcTo(x, y+h, x, y, 0);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
+/* ============================================================
+   TRANSACTION SHEET (view / delete)
+   ============================================================ */
+function openTxSheet(id) {
+  const t = transactions.find(x => x.id === id); if (!t) return;
+  const c = findCat(t.type, t.category);
+  const d = parseYmd(t.date);
+  sheet(`
+    <h3>${c.emoji} ${esc(c.name)}</h3>
+    <div style="text-align:center;font-size:38px;font-weight:800;color:${t.type==='income'?'var(--income)':'var(--expense)'};margin:6px 0;">
+      ${t.type==='income'?'+':'−'}${fmt(t.amount).replace('−','')}
+    </div>
+    <div class="set-row"><span>Тип</span><span>${t.type==='income'?'Дохід':'Витрата'}</span></div>
+    <div class="set-row"><span>Дата</span><span>${d.getDate()} ${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()}</span></div>
+    ${t.note?`<div class="set-row"><span>Нотатка</span><span>${esc(t.note)}</span></div>`:''}
+    <div class="set-row"><span>Джерело</span><span>${t.source==='receipt'?'Чек 🧾':'Вручну'}</span></div>
+    <button class="btn-secondary btn-danger" style="margin-top:16px;" id="delTxBtn">🗑️ Видалити операцію</button>
+  `);
+  $('#delTxBtn').addEventListener('click', () => {
+    transactions = transactions.filter(x => x.id !== id);
+    saveTx(); closeSheet(); toast('Видалено'); refreshAll();
+  });
+}
+
+/* ============================================================
+   SETTINGS
+   ============================================================ */
+$$('[data-set]').forEach(r => r.addEventListener('click', () => {
+  const action = r.dataset.set;
+  if (action === 'changePin') PIN.show('change-old');
+  else if (action === 'export') exportData();
+  else if (action === 'import') $('#importFile').click();
+  else if (action === 'categories') openCategorySheet();
+  else if (action === 'clear') confirmClear();
+}));
+
+function renderStats() {
+  const n = transactions.length;
+  const inc = sum(transactions.filter(t=>t.type==='income'));
+  const exp = sum(transactions.filter(t=>t.type==='expense'));
+  $('#statLine').textContent = `Операцій: ${n} • Всього доходів: ${fmtShort(inc)} • витрат: ${fmtShort(exp)}`;
+}
+
+function exportData() {
+  const data = { app: 'groshi', version: 1, exportedAt: new Date().toISOString(), transactions, customCats };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `groshi-backup-${todayYmd()}.json`;
+  a.click(); URL.revokeObjectURL(url);
+  toast('Резервну копію збережено');
+}
+
+$('#importFile').addEventListener('change', (e) => {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const incoming = Array.isArray(data) ? data : (data.transactions || []);
+      if (!Array.isArray(incoming)) throw new Error('bad');
+      let added = 0;
+      const existing = new Set(transactions.map(t => t.id));
+      incoming.forEach(t => {
+        const tx = normalizeTx(t);
+        if (tx && !existing.has(tx.id)) { transactions.push(tx); existing.add(tx.id); added++; }
+      });
+      if (data.customCats) {
+        ['expense','income'].forEach(k => {
+          (data.customCats[k]||[]).forEach(c => {
+            if (!allCats(k).find(x => x.id === c.id)) customCats[k].push(c);
+          });
+        });
+        saveCats();
+      }
+      saveTx(); refreshAll();
+      toast(`Імпортовано: ${added} операцій`);
+    } catch { toast('Помилка читання файлу'); }
+    e.target.value = '';
+  };
+  reader.readAsText(file);
+});
+
+function normalizeTx(t) {
+  if (!t || typeof t.amount === 'undefined') return null;
+  const type = t.type === 'income' ? 'income' : 'expense';
+  return {
+    id: t.id || ('tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7)),
+    type,
+    amount: Math.abs(parseFloat(t.amount)) || 0,
+    category: t.category || (type === 'income' ? 'other_inc' : 'other_exp'),
+    date: t.date || todayYmd(),
+    note: t.note || '',
+    source: t.source || 'receipt',
+    createdAt: t.createdAt || new Date().toISOString(),
+  };
+}
+
+function openCategorySheet() {
+  sheet(`
+    <h3>Власна стаття</h3>
+    <div class="seg" id="newCatType" style="margin-bottom:14px;">
+      <button data-t="expense" class="active">Витрата</button>
+      <button data-t="income">Дохід</button>
+    </div>
+    <div class="field"><label>Назва</label><input type="text" id="newCatName" placeholder="Напр. Спорт" maxlength="20"></div>
+    <div class="field"><label>Емодзі</label><input type="text" id="newCatEmoji" placeholder="🏋️" maxlength="4"></div>
+    <button class="btn-primary" id="addCatBtn">Додати статтю</button>
+  `);
+  let nt = 'expense';
+  $$('#newCatType button').forEach(b => b.addEventListener('click', () => {
+    nt = b.dataset.t; $$('#newCatType button').forEach(x => x.classList.toggle('active', x===b));
+  }));
+  $('#addCatBtn').addEventListener('click', () => {
+    const name = $('#newCatName').value.trim();
+    const emoji = $('#newCatEmoji').value.trim() || '🎯';
+    if (!name) { toast('Введіть назву'); return; }
+    const palette = ['#00f0ff','#ff2bd6','#3dff9e','#9b5cff','#ffb13d','#5c8bff','#ff7b3d'];
+    customCats[nt].push({
+      id: 'c_' + Date.now().toString(36),
+      name, emoji, color: palette[Math.floor(Math.random()*palette.length)]
+    });
+    saveCats(); closeSheet(); toast('Статтю додано'); renderCategories();
+  });
+}
+
+function confirmClear() {
+  sheet(`
+    <h3>Очистити всі дані?</h3>
+    <p style="color:var(--txt-dim);font-size:14px;">Усі операції та власні статті буде видалено без відновлення. PIN-код залишиться. Рекомендуємо спершу зробити експорт.</p>
+    <button class="btn-secondary btn-danger" id="confirmClearBtn" style="margin-top:10px;">Так, видалити все</button>
+    <button class="btn-secondary" id="cancelClearBtn" style="margin-top:10px;">Скасувати</button>
+  `);
+  $('#confirmClearBtn').addEventListener('click', () => {
+    transactions = []; customCats = { expense: [], income: [] };
+    saveTx(); saveCats(); closeSheet(); refreshAll(); toast('Дані очищено');
+  });
+  $('#cancelClearBtn').addEventListener('click', closeSheet);
+}
+
+/* ============================================================
+   SHEET helpers
+   ============================================================ */
+function sheet(html) {
+  $('#sheetContent').innerHTML = html;
+  $('#sheetBackdrop').classList.add('show');
+}
+function closeSheet() { $('#sheetBackdrop').classList.remove('show'); }
+$('#sheetBackdrop').addEventListener('click', (e) => { if (e.target.id === 'sheetBackdrop') closeSheet(); });
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+let toastTimer;
+function toast(msg) {
+  const el = $('#toast'); el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+/* ============================================================
+   UTIL
+   ============================================================ */
+function esc(s) { return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+function refreshAll() {
+  const active = $('.screen.active').id.replace('screen-', '');
+  renderHome();
+  if (active === 'calendar') renderCalendar();
+  if (active === 'analytics') renderAnalytics();
+  if (active === 'settings') renderStats();
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+function init() {
+  load();
+  showWisdom();
+  $('#addDate').value = todayYmd();
+  $('#customFrom').value = ymd(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  $('#customTo').value = todayYmd();
+  resetAddForm();
+  renderHome();
+  PIN.init();
+}
+init();
+
+/* Service worker */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}

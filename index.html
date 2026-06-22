@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#07070d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Гроші">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Гроші — фінанси</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ===== PIN LOCK ===== -->
+  <div class="lock-screen hidden" id="lockScreen">
+    <div class="lock-logo">💎</div>
+    <div class="lock-title" id="lockTitle">Введіть PIN-код</div>
+    <div class="lock-sub" id="lockSub">Доступ до ваших фінансів</div>
+    <div class="pin-dots" id="pinDots">
+      <div class="pin-dot"></div><div class="pin-dot"></div>
+      <div class="pin-dot"></div><div class="pin-dot"></div>
+    </div>
+    <div class="pin-pad" id="pinPad">
+      <button class="pin-key">1</button><button class="pin-key">2</button><button class="pin-key">3</button>
+      <button class="pin-key">4</button><button class="pin-key">5</button><button class="pin-key">6</button>
+      <button class="pin-key">7</button><button class="pin-key">8</button><button class="pin-key">9</button>
+      <button class="pin-key blank"></button>
+      <button class="pin-key">0</button>
+      <button class="pin-key del" data-act="del">⌫</button>
+    </div>
+  </div>
+
+  <!-- ===== APP ===== -->
+  <div id="app">
+
+    <!-- HOME -->
+    <section class="screen active" id="screen-home">
+      <div class="app-header">
+        <div>
+          <h1>Привіт 👋</h1>
+          <div class="sub" id="todayLabel"></div>
+        </div>
+      </div>
+
+      <div class="card wisdom" id="wisdomCard">
+        <div class="quote-mark">"</div>
+        <p id="wisdomText"></p>
+        <div class="author" id="wisdomAuthor"></div>
+      </div>
+
+      <div class="card balance-card">
+        <div class="label">Баланс за <span id="balPeriodName">місяць</span></div>
+        <div class="amount" id="balanceAmount">0 ₴</div>
+        <div class="period-label" id="balPeriodRange"></div>
+        <div class="io-row">
+          <div class="io-box">
+            <div class="io-label"><span class="dot inc"></span> Доходи</div>
+            <div class="io-amt inc" id="homeIncome">0 ₴</div>
+          </div>
+          <div class="io-box">
+            <div class="io-label"><span class="dot exp"></span> Витрати</div>
+            <div class="io-amt exp" id="homeExpense">0 ₴</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">
+        <span>Останні операції</span>
+        <span class="link" data-goto="analytics">Аналітика →</span>
+      </div>
+      <div class="tx-list" id="homeTxList"></div>
+    </section>
+
+    <!-- CALENDAR -->
+    <section class="screen" id="screen-calendar">
+      <div class="app-header"><div><h1>Календар</h1><div class="sub" id="calSummary"></div></div></div>
+      <div class="card">
+        <div class="cal-head">
+          <button class="cal-nav" data-cal="-1">‹</button>
+          <div class="month-name" id="calMonthName"></div>
+          <button class="cal-nav" data-cal="1">›</button>
+        </div>
+        <div class="cal-grid" id="calDow"></div>
+        <div class="cal-grid" id="calGrid" style="margin-top:6px;"></div>
+      </div>
+      <div class="section-title"><span id="calDayTitle">Оберіть день</span></div>
+      <div class="tx-list" id="calTxList"></div>
+    </section>
+
+    <!-- ADD -->
+    <section class="screen" id="screen-add">
+      <div class="app-header"><div><h1>Нова операція</h1></div></div>
+      <div class="type-toggle" id="typeToggle">
+        <button data-type="expense" class="active exp">Витрата</button>
+        <button data-type="income" class="inc">Дохід</button>
+      </div>
+
+      <div class="amount-display"><span id="amountValue">0</span> <span class="cur">₴</span></div>
+      <div class="amount-hint">Введіть суму та оберіть статтю</div>
+
+      <div class="keypad" id="keypad">
+        <button class="key">1</button><button class="key">2</button><button class="key">3</button>
+        <button class="key">4</button><button class="key">5</button><button class="key">6</button>
+        <button class="key">7</button><button class="key">8</button><button class="key">9</button>
+        <button class="key" data-k=".">,</button>
+        <button class="key">0</button>
+        <button class="key" data-k="del">⌫</button>
+      </div>
+
+      <div class="section-title"><span>Стаття</span></div>
+      <div class="cat-grid" id="catGrid"></div>
+
+      <div class="field">
+        <label>Дата</label>
+        <input type="date" id="addDate">
+      </div>
+      <div class="field">
+        <label>Нотатка (необов'язково)</label>
+        <input type="text" id="addNote" placeholder="Напр. продукти АТБ" maxlength="80">
+      </div>
+
+      <button class="btn-primary" id="saveTxBtn" disabled>Зберегти операцію</button>
+    </section>
+
+    <!-- ANALYTICS -->
+    <section class="screen" id="screen-analytics">
+      <div class="app-header"><div><h1>Аналітика</h1></div></div>
+
+      <div class="period-bar" id="periodBar">
+        <button class="chip" data-period="day">День</button>
+        <button class="chip" data-period="week">Тиждень</button>
+        <button class="chip active" data-period="month">Місяць</button>
+        <button class="chip" data-period="year">Рік</button>
+        <button class="chip" data-period="all">Весь час</button>
+        <button class="chip" data-period="custom">Період…</button>
+      </div>
+
+      <div class="card hidden" id="customRangeCard">
+        <div class="field"><label>Від</label><input type="date" id="customFrom"></div>
+        <div class="field" style="margin-bottom:0;"><label>До</label><input type="date" id="customTo"></div>
+      </div>
+
+      <div class="seg" id="ioSeg">
+        <button data-io="expense" class="active">Витрати</button>
+        <button data-io="income">Доходи</button>
+      </div>
+
+      <div class="card">
+        <div class="chart-wrap">
+          <canvas id="donutCanvas" height="240"></canvas>
+          <div class="donut-center">
+            <div class="dc-amt" id="donutTotal">0 ₴</div>
+            <div class="dc-label" id="donutLabel">Витрати</div>
+          </div>
+        </div>
+        <div class="legend" id="donutLegend"></div>
+      </div>
+
+      <div class="section-title"><span>Порівняння з попереднім періодом</span></div>
+      <div class="card">
+        <canvas id="barCanvas" height="200"></canvas>
+        <div id="compareStats"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="screen" id="screen-settings">
+      <div class="app-header"><div><h1>Налаштування</h1></div></div>
+      <div class="card" style="padding:6px 18px;">
+        <div class="set-row" data-set="changePin">
+          <div class="sr-left"><span class="sr-ic">🔒</span><div>Змінити PIN-код<div class="sr-desc">Захист входу</div></div></div>
+          <span class="chev">›</span>
+        </div>
+        <div class="set-row" data-set="export">
+          <div class="sr-left"><span class="sr-ic">⬆️</span><div>Експорт даних<div class="sr-desc">Зберегти резервну копію (JSON)</div></div></div>
+          <span class="chev">›</span>
+        </div>
+        <div class="set-row" data-set="import">
+          <div class="sr-left"><span class="sr-ic">⬇️</span><div>Імпорт даних<div class="sr-desc">Завантажити чеки / резервну копію</div></div></div>
+          <span class="chev">›</span>
+        </div>
+        <div class="set-row" data-set="categories">
+          <div class="sr-left"><span class="sr-ic">🏷️</span><div>Власні статті<div class="sr-desc">Додати свою категорію</div></div></div>
+          <span class="chev">›</span>
+        </div>
+        <div class="set-row" data-set="clear">
+          <div class="sr-left"><span class="sr-ic">🗑️</span><div class="btn-danger" style="border:none;padding:0;">Очистити всі дані</div></div>
+          <span class="chev">›</span>
+        </div>
+      </div>
+      <div class="card" style="text-align:center;color:var(--txt-faint);font-size:12px;">
+        Гроші • локальне зберігання на пристрої<br>дані не залишають ваш телефон
+        <div id="statLine" style="margin-top:8px;color:var(--txt-dim);"></div>
+      </div>
+      <input type="file" id="importFile" accept="application/json" class="hidden">
+    </section>
+
+    <!-- TAB BAR -->
+    <nav class="tabbar">
+      <button class="tab active" data-goto="home"><span class="ic">🏠</span>Головна</button>
+      <button class="tab" data-goto="calendar"><span class="ic">📅</span>Календар</button>
+      <button class="tab add-tab" data-goto="add"><span class="ic">+</span></button>
+      <button class="tab" data-goto="analytics"><span class="ic">📊</span>Аналітика</button>
+      <button class="tab" data-goto="settings"><span class="ic">⚙️</span>Ще</button>
+    </nav>
+  </div>
+
+  <!-- SHEET -->
+  <div class="sheet-backdrop" id="sheetBackdrop">
+    <div class="sheet" id="sheet">
+      <div class="sheet-handle"></div>
+      <div id="sheetContent"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
