@@ -9,6 +9,7 @@ const STORE = {
   meta: 'groshi_meta_v1',
   budgets: 'groshi_budgets_v1',
   ai: 'groshi_ai_v1',
+  goal: 'groshi_goal_v1',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -19,6 +20,7 @@ let transactions = [];
 let customCats = { expense: [], income: [] };
 let budgets = {};                // { categoryId: monthlyLimit }
 let aiConfig = { key: '', model: 'claude-opus-4-8', enabled: false };
+let goal = { name: 'Авто', target: 30000, saved: 0 };
 let state = {
   addType: 'expense',
   addAmount: '0',
@@ -38,11 +40,13 @@ function load() {
   try { customCats = JSON.parse(localStorage.getItem(STORE.cats)) || { expense: [], income: [] }; } catch {}
   try { budgets = JSON.parse(localStorage.getItem(STORE.budgets)) || {}; } catch { budgets = {}; }
   try { aiConfig = { ...aiConfig, ...(JSON.parse(localStorage.getItem(STORE.ai)) || {}) }; } catch {}
+  try { const g = JSON.parse(localStorage.getItem(STORE.goal)); if (g) goal = { ...goal, ...g }; } catch {}
 }
 function saveTx() { localStorage.setItem(STORE.tx, JSON.stringify(transactions)); }
 function saveCats() { localStorage.setItem(STORE.cats, JSON.stringify(customCats)); }
 function saveBudgets() { localStorage.setItem(STORE.budgets, JSON.stringify(budgets)); }
 function saveAi() { localStorage.setItem(STORE.ai, JSON.stringify(aiConfig)); }
+function saveGoal() { localStorage.setItem(STORE.goal, JSON.stringify(goal)); }
 
 /* ---------- Photo storage (IndexedDB) ---------- */
 const PhotoDB = {
@@ -303,9 +307,57 @@ function showWisdom() {
   $('#wisdomAuthor').textContent = '— ' + w.a;
 }
 
+function updateGoalCard() {
+  const saved = goal.saved || 0, target = goal.target || 0;
+  $('#goalName').textContent = goal.name || 'Накопичення';
+  $('#goalSaved').textContent = fmt(saved);
+  $('#goalTarget').textContent = fmt(target);
+  const ratio = target > 0 ? Math.min(1, saved / target) : 0;
+  $('#goalBarFill').style.width = (ratio * 100) + '%';
+  const remainEl = $('#goalRemain');
+  const left = target - saved;
+  if (target > 0 && left <= 0) {
+    remainEl.classList.add('done');
+    remainEl.innerHTML = `🎉 Ціль досягнута! Накопичено ${fmt(saved)} (${Math.round(ratio*100)}%)`;
+  } else {
+    remainEl.classList.remove('done');
+    remainEl.innerHTML = `Залишилось зібрати: <b>${fmt(left)}</b> • ${Math.round(ratio*100)}%`;
+  }
+}
+function addToGoal() {
+  const inp = $('#goalInput');
+  const v = parseFloat((inp.value || '').replace(',', '.'));
+  if (!(v > 0)) { toast('Введіть суму'); return; }
+  goal.saved = Math.round(((goal.saved || 0) + v) * 100) / 100;
+  saveGoal(); inp.value = ''; inp.blur(); updateGoalCard();
+  toast(`Додано ${fmt(v)} до цілі ✓`);
+}
+function openGoalSheet() {
+  sheet(`<h3>🎯 Налаштування цілі</h3>
+    <div class="field"><label>Назва цілі</label><input type="text" id="goalNameInp" maxlength="30" value="${esc(goal.name || '')}" placeholder="Напр. Авто"></div>
+    <div class="field"><label>Сума цілі, ₴</label><input type="number" inputmode="decimal" id="goalTargetInp" value="${goal.target || ''}" placeholder="30000"></div>
+    <div class="field"><label>Вже накопичено, ₴</label><input type="number" inputmode="decimal" id="goalSavedInp" value="${goal.saved || ''}" placeholder="0"></div>
+    <button class="btn-primary" id="saveGoalBtn">Зберегти ціль</button>
+    <button class="btn-secondary btn-danger" id="resetGoalBtn" style="margin-top:10px;">Обнулити накопичення</button>`);
+  $('#saveGoalBtn').addEventListener('click', () => {
+    goal.name = ($('#goalNameInp').value.trim()) || 'Накопичення';
+    goal.target = Math.max(0, parseFloat($('#goalTargetInp').value) || 0);
+    goal.saved = Math.max(0, parseFloat($('#goalSavedInp').value) || 0);
+    saveGoal(); closeSheet(); updateGoalCard(); toast('Ціль збережено');
+  });
+  $('#resetGoalBtn').addEventListener('click', () => {
+    goal.saved = 0; saveGoal(); closeSheet(); updateGoalCard(); toast('Накопичення обнулено');
+  });
+}
+
+$('#goalAddBtn').addEventListener('click', addToGoal);
+$('#goalInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addToGoal(); });
+$('#goalEditBtn').addEventListener('click', openGoalSheet);
+
 function renderHome() {
   const now = new Date();
   $('#todayLabel').textContent = `Сьогодні, ${now.getDate()} ${MONTHS_GEN[now.getMonth()]} ${now.getFullYear()}`;
+  updateGoalCard();
 
   const { from, to } = periodRange('month');
   const tx = inRange(transactions, from, to);
@@ -738,9 +790,9 @@ const CAT_SYN = {
   subs:['підписк','подписк','subscription','netflix','spotify','youtube','apple'],
   edu:['освіт','навчан','образован','курс','книг','школ','репетит'],
   travel:['подорож','путешеств','відпустк','відрядж','готел','квит','авіа','booking'],
-  beauty:['крас','салон','перукар','космет','манікюр','барбер','спа'],
+  beauty:['крас','салон','перукар','космет','манікюр','барбер','спа','волос','зачіск','стрижк'],
   pets:['тварин','животн','собак','кіт','кот','корм','ветерин'],
-  gifts_out:['подар','gift','презент'],
+  gifts_out:['син ','сину','сина','синов','синочк','дитин','дітям'],
   tech:['техн','гаджет','компют','компʼют','ноутбук','телефон','девайс','навушник'],
   salary:['зарплат','зп','salary','оклад','получк'],
   freelance:['фриланс','freelance','підробіт','подработ'],
@@ -1145,7 +1197,7 @@ async function exportData() {
   toast('Готую копію…');
   let photos = {};
   try { photos = await PhotoDB.all(); } catch {}
-  const data = { app: 'groshi', version: 1, exportedAt: new Date().toISOString(), transactions, customCats, budgets, photos };
+  const data = { app: 'groshi', version: 1, exportedAt: new Date().toISOString(), transactions, customCats, budgets, goal, photos };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1187,6 +1239,7 @@ function importData(data) {
     saveCats();
   }
   if (data.budgets && typeof data.budgets === 'object') { budgets = { ...budgets, ...data.budgets }; saveBudgets(); }
+  if (data.goal && typeof data.goal === 'object') { goal = { ...goal, ...data.goal }; saveGoal(); }
 
   // асинхронно: прикріпити фото з черги розпізнавання + відновити фото з бекапу
   (async () => {

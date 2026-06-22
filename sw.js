@@ -1,5 +1,5 @@
 /* Service worker — офлайн-кеш */
-const CACHE = 'groshi-v4';
+const CACHE = 'groshi-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,12 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE)
+      // cache: 'reload' — завжди тягнемо свіже з мережі, минаючи HTTP-кеш браузера
+      .then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (e) => {
