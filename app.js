@@ -19,6 +19,7 @@ let state = {
   addType: 'expense',
   addAmount: '0',
   addCat: null,
+  addPhoto: null,
   analyticsPeriod: 'month',
   analyticsIO: 'expense',
   customFrom: null,
@@ -34,6 +35,116 @@ function load() {
 }
 function saveTx() { localStorage.setItem(STORE.tx, JSON.stringify(transactions)); }
 function saveCats() { localStorage.setItem(STORE.cats, JSON.stringify(customCats)); }
+
+/* ---------- Photo storage (IndexedDB) ---------- */
+const PhotoDB = {
+  db: null,
+  open() {
+    return new Promise((res, rej) => {
+      if (this.db) return res(this.db);
+      const r = indexedDB.open('groshi_photos', 2);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos');
+        if (!db.objectStoreNames.contains('pending')) db.createObjectStore('pending');
+      };
+      r.onsuccess = () => { this.db = r.result; res(this.db); };
+      r.onerror = () => rej(r.error);
+    });
+  },
+  // --- черга чеків на розпізнавання ---
+  async putPending(id, obj) {
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('pending', 'readwrite');
+      tx.objectStore('pending').put(obj, id);
+      tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+    });
+  },
+  async getPending(id) {
+    const db = await this.open();
+    return new Promise((res) => {
+      const tx = db.transaction('pending', 'readonly');
+      const rq = tx.objectStore('pending').get(id);
+      rq.onsuccess = () => res(rq.result || null);
+      rq.onerror = () => res(null);
+    });
+  },
+  async allPending() {
+    const db = await this.open();
+    return new Promise((res) => {
+      const out = [];
+      const tx = db.transaction('pending', 'readonly');
+      const cur = tx.objectStore('pending').openCursor();
+      cur.onsuccess = (e) => { const c = e.target.result; if (c) { out.push({ id: c.key, ...c.value }); c.continue(); } else res(out); };
+      cur.onerror = () => res(out);
+    });
+  },
+  async delPending(id) {
+    const db = await this.open();
+    return new Promise((res) => {
+      const tx = db.transaction('pending', 'readwrite');
+      tx.objectStore('pending').delete(id);
+      tx.oncomplete = () => res(); tx.onerror = () => res();
+    });
+  },
+  async countPending() { return (await this.allPending()).length; },
+  async put(id, dataUrl) {
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('photos', 'readwrite');
+      tx.objectStore('photos').put(dataUrl, id);
+      tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+    });
+  },
+  async get(id) {
+    const db = await this.open();
+    return new Promise((res) => {
+      const tx = db.transaction('photos', 'readonly');
+      const rq = tx.objectStore('photos').get(id);
+      rq.onsuccess = () => res(rq.result || null);
+      rq.onerror = () => res(null);
+    });
+  },
+  async del(id) {
+    const db = await this.open();
+    return new Promise((res) => {
+      const tx = db.transaction('photos', 'readwrite');
+      tx.objectStore('photos').delete(id);
+      tx.oncomplete = () => res(); tx.onerror = () => res();
+    });
+  },
+  async all() {
+    const db = await this.open();
+    return new Promise((res) => {
+      const out = {};
+      const tx = db.transaction('photos', 'readonly');
+      const cur = tx.objectStore('photos').openCursor();
+      cur.onsuccess = (e) => { const c = e.target.result; if (c) { out[c.key] = c.value; c.continue(); } else res(out); };
+      cur.onerror = () => res(out);
+    });
+  }
+};
+
+// Стиснення фото чека до compact JPEG (зменшує розмір у рази)
+function compressImage(file, maxDim = 1280, quality = 0.72) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      const scale = Math.min(1, maxDim / Math.max(width, height));
+      width = Math.round(width * scale); height = Math.round(height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(url);
+      try { res(canvas.toDataURL('image/jpeg', quality)); } catch (e) { rej(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('image load failed')); };
+    img.src = url;
+  });
+}
 
 function allCats(type) {
   return [...DEFAULT_CATEGORIES[type], ...(customCats[type] || [])];
@@ -168,6 +279,7 @@ function goto(screen) {
   if (screen === 'analytics') renderAnalytics();
   if (screen === 'add') renderCategories();
   if (screen === 'settings') renderStats();
+  if (screen === 'receipts') renderReceipts();
 }
 document.body.addEventListener('click', (e) => {
   const nav = e.target.closest('[data-goto]');
@@ -204,6 +316,21 @@ function renderHome() {
 
   const recent = [...transactions].sort((a,b) => (b.date+b.createdAt).localeCompare(a.date+a.createdAt)).slice(0, 8);
   renderTxList($('#homeTxList'), recent);
+
+  // картка черги чеків
+  PhotoDB.countPending().then(c => {
+    const wrap = $('#homePendingCard');
+    if (!wrap) return;
+    if (!c) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = `<div class="card pending-card" data-goto="receipts">
+      <span class="pc-ic">🧾</span>
+      <div class="pc-txt">
+        <div class="pc-title">${c} ${c===1?'чек очікує':'чеків очікують'} розпізнавання</div>
+        <div class="pc-sub">Натисни, щоб переглянути та експортувати</div>
+      </div>
+      <span class="pc-arrow">→</span>
+    </div>`;
+  });
 }
 
 function renderTxList(container, list) {
@@ -314,24 +441,48 @@ $('#typeToggle').addEventListener('click', (e) => {
   $$('#typeToggle button').forEach(x => x.classList.toggle('active', x === b));
   renderCategories(); updateSaveBtn();
 });
-$('#saveTxBtn').addEventListener('click', () => {
+/* ---- Photo capture ---- */
+$('#photoBtn').addEventListener('click', () => $('#photoInput').click());
+$('#photoInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  try {
+    toast('Обробка фото…');
+    state.addPhoto = await compressImage(file);
+    $('#photoThumb').src = state.addPhoto;
+    $('#photoPreview').classList.remove('hidden');
+    $('#photoBtn').classList.add('hidden');
+  } catch { toast('Не вдалося обробити фото'); }
+});
+$('#photoRemove').addEventListener('click', () => {
+  state.addPhoto = null;
+  $('#photoPreview').classList.add('hidden');
+  $('#photoBtn').classList.remove('hidden');
+  $('#photoThumb').src = '';
+});
+
+$('#saveTxBtn').addEventListener('click', async () => {
   const amt = parseFloat(state.addAmount.replace(',', '.')) || 0;
   if (!(amt > 0 && state.addCat)) return;
-  transactions.push({
-    id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
-    type: state.addType, amount: amt, category: state.addCat,
+  const id = 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+  const tx = {
+    id, type: state.addType, amount: amt, category: state.addCat,
     date: $('#addDate').value || todayYmd(),
     note: $('#addNote').value.trim(), source: 'manual',
+    hasPhoto: !!state.addPhoto,
     createdAt: new Date().toISOString(),
-  });
+  };
+  if (state.addPhoto) { try { await PhotoDB.put(id, state.addPhoto); } catch { tx.hasPhoto = false; } }
+  transactions.push(tx);
   saveTx();
   resetAddForm();
   toast('Операцію збережено ✓');
   goto('home');
 });
 function resetAddForm() {
-  state.addAmount = '0'; state.addCat = null; state.addType = 'expense';
+  state.addAmount = '0'; state.addCat = null; state.addType = 'expense'; state.addPhoto = null;
   $('#addNote').value = ''; $('#addDate').value = todayYmd();
+  $('#photoPreview').classList.add('hidden'); $('#photoBtn').classList.remove('hidden'); $('#photoThumb').src = '';
   $$('#typeToggle button').forEach(x => x.classList.toggle('active', x.dataset.type === 'expense'));
   updateAmountDisplay(); renderCategories();
 }
@@ -573,16 +724,89 @@ function openTxSheet(id) {
     <div style="text-align:center;font-size:38px;font-weight:800;color:${t.type==='income'?'var(--income)':'var(--expense)'};margin:6px 0;">
       ${t.type==='income'?'+':'−'}${fmt(t.amount).replace('−','')}
     </div>
+    <div id="txPhotoWrap"></div>
     <div class="set-row"><span>Тип</span><span>${t.type==='income'?'Дохід':'Витрата'}</span></div>
     <div class="set-row"><span>Дата</span><span>${d.getDate()} ${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()}</span></div>
     ${t.note?`<div class="set-row"><span>Нотатка</span><span>${esc(t.note)}</span></div>`:''}
     <div class="set-row"><span>Джерело</span><span>${t.source==='receipt'?'Чек 🧾':'Вручну'}</span></div>
     <button class="btn-secondary btn-danger" style="margin-top:16px;" id="delTxBtn">🗑️ Видалити операцію</button>
   `);
-  $('#delTxBtn').addEventListener('click', () => {
+  if (t.hasPhoto) {
+    PhotoDB.get(id).then(url => {
+      if (!url) return;
+      const wrap = $('#txPhotoWrap'); if (!wrap) return;
+      wrap.innerHTML = `<img class="tx-photo-thumb" src="${url}" alt="чек">`;
+      $('.tx-photo-thumb', wrap).addEventListener('click', () => openPhotoViewer(url));
+    });
+  }
+  $('#delTxBtn').addEventListener('click', async () => {
     transactions = transactions.filter(x => x.id !== id);
-    saveTx(); closeSheet(); toast('Видалено'); refreshAll();
+    saveTx(); if (t.hasPhoto) await PhotoDB.del(id);
+    closeSheet(); toast('Видалено'); refreshAll();
   });
+}
+
+/* ============================================================
+   RECEIPTS — черга на розпізнавання
+   ============================================================ */
+$('#rcpCaptureBtn').addEventListener('click', () => $('#rcpInput').click());
+$('#rcpInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  try {
+    toast('Обробка фото…');
+    const photo = await compressImage(file);
+    const id = 'rcp_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    await PhotoDB.putPending(id, { date: todayYmd(), photo, createdAt: new Date().toISOString() });
+    renderReceipts(); renderHome();
+    toast('Чек додано в чергу ✓');
+  } catch { toast('Не вдалося обробити фото'); }
+});
+$('#rcpExportBtn').addEventListener('click', exportReceiptsForRecognition);
+
+async function renderReceipts() {
+  const items = (await PhotoDB.allPending()).sort((a,b) => b.createdAt.localeCompare(a.createdAt));
+  $('#rcpCountTitle').textContent = items.length ? `У черзі: ${items.length}` : 'Черга порожня';
+  const grid = $('#rcpGrid');
+  if (!items.length) {
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1;"><span class="big">🧾</span>Поки немає чеків.<br>Сфотографуй чек кнопкою вгорі.</div>`;
+    return;
+  }
+  grid.innerHTML = items.map(it => {
+    const d = parseYmd(it.date);
+    return `<div class="rcp-item" data-rcp="${it.id}">
+      <img src="${it.photo}" alt="чек">
+      <span class="rcp-date">${d.getDate()} ${MONTHS_GEN[d.getMonth()]}</span>
+      <button class="rcp-del" data-del="${it.id}">✕</button>
+    </div>`;
+  }).join('');
+  $$('.rcp-item', grid).forEach(el => el.addEventListener('click', (ev) => {
+    if (ev.target.closest('.rcp-del')) return;
+    const it = items.find(x => x.id === el.dataset.rcp);
+    if (it) openPhotoViewer(it.photo);
+  }));
+  $$('.rcp-del', grid).forEach(b => b.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    await PhotoDB.delPending(b.dataset.del);
+    renderReceipts(); renderHome();
+    toast('Видалено з черги');
+  }));
+}
+
+async function exportReceiptsForRecognition() {
+  const items = await PhotoDB.allPending();
+  if (!items.length) { toast('Немає чеків для розпізнавання'); return; }
+  const data = {
+    app: 'groshi', kind: 'recognition_request', version: 1,
+    createdAt: new Date().toISOString(),
+    receipts: items.map(it => ({ id: it.id, date: it.date, photo: it.photo })),
+  };
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `groshi-розпізнати-${todayYmd()}.json`;
+  a.click(); URL.revokeObjectURL(url);
+  toast(`Експортовано ${items.length} чеків — надішли файл Claude`);
 }
 
 /* ============================================================
@@ -593,6 +817,7 @@ $$('[data-set]').forEach(r => r.addEventListener('click', () => {
   if (action === 'changePin') PIN.show('change-old');
   else if (action === 'export') exportData();
   else if (action === 'import') $('#importFile').click();
+  else if (action === 'receipts') goto('receipts');
   else if (action === 'categories') openCategorySheet();
   else if (action === 'clear') confirmClear();
 }));
@@ -602,11 +827,17 @@ function renderStats() {
   const inc = sum(transactions.filter(t=>t.type==='income'));
   const exp = sum(transactions.filter(t=>t.type==='expense'));
   $('#statLine').textContent = `Операцій: ${n} • Всього доходів: ${fmtShort(inc)} • витрат: ${fmtShort(exp)}`;
+  PhotoDB.countPending().then(c => {
+    $('#rcpSetCount').textContent = c ? `${c} у черзі на розпізнавання` : 'Фото чеків у черзі';
+  });
 }
 
-function exportData() {
-  const data = { app: 'groshi', version: 1, exportedAt: new Date().toISOString(), transactions, customCats };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+async function exportData() {
+  toast('Готую копію…');
+  let photos = {};
+  try { photos = await PhotoDB.all(); } catch {}
+  const data = { app: 'groshi', version: 1, exportedAt: new Date().toISOString(), transactions, customCats, photos };
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = `groshi-backup-${todayYmd()}.json`;
@@ -618,31 +849,52 @@ $('#importFile').addEventListener('change', (e) => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    try {
-      const data = JSON.parse(reader.result);
-      const incoming = Array.isArray(data) ? data : (data.transactions || []);
-      if (!Array.isArray(incoming)) throw new Error('bad');
-      let added = 0;
-      const existing = new Set(transactions.map(t => t.id));
-      incoming.forEach(t => {
-        const tx = normalizeTx(t);
-        if (tx && !existing.has(tx.id)) { transactions.push(tx); existing.add(tx.id); added++; }
-      });
-      if (data.customCats) {
-        ['expense','income'].forEach(k => {
-          (data.customCats[k]||[]).forEach(c => {
-            if (!allCats(k).find(x => x.id === c.id)) customCats[k].push(c);
-          });
-        });
-        saveCats();
-      }
-      saveTx(); refreshAll();
-      toast(`Імпортовано: ${added} операцій`);
-    } catch { toast('Помилка читання файлу'); }
+    try { importData(JSON.parse(reader.result)); }
+    catch { toast('Помилка читання файлу'); }
     e.target.value = '';
   };
   reader.readAsText(file);
 });
+
+// Універсальний імпорт: резервна копія АБО результат розпізнавання чеків (з receiptId)
+function importData(data) {
+  const incoming = Array.isArray(data) ? data : (data.transactions || []);
+  if (!Array.isArray(incoming)) { toast('Невідомий формат файлу'); return; }
+  let added = 0;
+  const existing = new Set(transactions.map(t => t.id));
+  const created = [];
+  incoming.forEach(t => {
+    const tx = normalizeTx(t);
+    if (!tx || existing.has(tx.id)) return;
+    if (t.receiptId) tx.__receiptId = t.receiptId;
+    transactions.push(tx); existing.add(tx.id); added++; created.push(tx);
+  });
+  if (data.customCats) {
+    ['expense','income'].forEach(k => {
+      (data.customCats[k]||[]).forEach(c => {
+        if (!allCats(k).find(x => x.id === c.id)) customCats[k].push(c);
+      });
+    });
+    saveCats();
+  }
+
+  // асинхронно: прикріпити фото з черги розпізнавання + відновити фото з бекапу
+  (async () => {
+    let recognized = 0;
+    for (const tx of created) {
+      if (tx.__receiptId) {
+        const p = await PhotoDB.getPending(tx.__receiptId);
+        if (p && p.photo) { await PhotoDB.put(tx.id, p.photo); tx.hasPhoto = true; await PhotoDB.delPending(tx.__receiptId); recognized++; }
+        delete tx.__receiptId;
+      }
+    }
+    if (data.photos && typeof data.photos === 'object') {
+      for (const [k, v] of Object.entries(data.photos)) { try { await PhotoDB.put(k, v); } catch {} }
+    }
+    saveTx(); refreshAll();
+    toast(recognized ? `Розпізнано чеків: ${recognized}` : `Імпортовано: ${added} операцій`);
+  })();
+}
 
 function normalizeTx(t) {
   if (!t || typeof t.amount === 'undefined') return null;
@@ -655,6 +907,7 @@ function normalizeTx(t) {
     date: t.date || todayYmd(),
     note: t.note || '',
     source: t.source || 'receipt',
+    hasPhoto: !!t.hasPhoto,
     createdAt: t.createdAt || new Date().toISOString(),
   };
 }
@@ -710,6 +963,16 @@ function sheet(html) {
 }
 function closeSheet() { $('#sheetBackdrop').classList.remove('show'); }
 $('#sheetBackdrop').addEventListener('click', (e) => { if (e.target.id === 'sheetBackdrop') closeSheet(); });
+
+/* Photo viewer */
+function openPhotoViewer(url) {
+  $('#photoViewerImg').src = url;
+  $('#photoViewer').classList.add('show');
+}
+$('#photoViewer').addEventListener('click', () => {
+  $('#photoViewer').classList.remove('show');
+  $('#photoViewerImg').src = '';
+});
 
 /* ============================================================
    TOAST

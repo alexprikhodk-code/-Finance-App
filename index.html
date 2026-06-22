@@ -69,6 +69,8 @@
         </div>
       </div>
 
+      <div id="homePendingCard"></div>
+
       <div class="section-title">
         <span>Останні операції</span>
         <span class="link" data-goto="analytics">Аналітика →</span>
@@ -123,6 +125,16 @@
         <label>Нотатка (необов'язково)</label>
         <input type="text" id="addNote" placeholder="Напр. продукти АТБ" maxlength="80">
       </div>
+
+      <div class="field">
+        <label>Фото чека (необов'язково)</label>
+        <button class="photo-btn" id="photoBtn"><span class="pic">📷</span> Сфотографувати чек</button>
+        <div class="photo-preview hidden" id="photoPreview">
+          <img id="photoThumb" alt="чек">
+          <button class="photo-remove" id="photoRemove" type="button">✕</button>
+        </div>
+      </div>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
 
       <button class="btn-primary" id="saveTxBtn" disabled>Зберегти операцію</button>
     </section>
@@ -180,6 +192,10 @@
           <div class="sr-left"><span class="sr-ic">⬆️</span><div>Експорт даних<div class="sr-desc">Зберегти резервну копію (JSON)</div></div></div>
           <span class="chev">›</span>
         </div>
+        <div class="set-row" data-set="receipts">
+          <div class="sr-left"><span class="sr-ic">🧾</span><div>Чеки на розпізнавання<div class="sr-desc" id="rcpSetCount">Фото чеків у черзі</div></div></div>
+          <span class="chev">›</span>
+        </div>
         <div class="set-row" data-set="import">
           <div class="sr-left"><span class="sr-ic">⬇️</span><div>Імпорт даних<div class="sr-desc">Завантажити чеки / резервну копію</div></div></div>
           <span class="chev">›</span>
@@ -200,6 +216,28 @@
       <input type="file" id="importFile" accept="application/json" class="hidden">
     </section>
 
+    <!-- RECEIPTS (recognition queue) -->
+    <section class="screen" id="screen-receipts">
+      <div class="app-header"><div><h1>Чеки 🧾</h1><div class="sub">Фото на розпізнавання</div></div></div>
+
+      <button class="photo-btn" id="rcpCaptureBtn" style="margin-bottom:14px;"><span class="pic">📷</span> Сфотографувати чек</button>
+      <input type="file" id="rcpInput" accept="image/*" capture="environment" class="hidden">
+
+      <div class="card" style="background:linear-gradient(135deg,rgba(155,92,255,.15),rgba(0,240,255,.08));">
+        <div style="font-size:13.5px;line-height:1.55;">
+          1️⃣ Фотографуй чеки — вони стають у чергу.<br>
+          2️⃣ Натисни <b>«Експорт для розпізнавання»</b> і надішли файл Claude.<br>
+          3️⃣ Отримаєш файл назад → <b>Ще → Імпорт</b>. Суми, дати й статті заповняться самі, фото прикріпляться.
+        </div>
+      </div>
+
+      <div class="section-title">
+        <span id="rcpCountTitle">Черга порожня</span>
+        <span class="link" id="rcpExportBtn">Експорт для розпізнавання →</span>
+      </div>
+      <div class="rcp-grid" id="rcpGrid"></div>
+    </section>
+
     <!-- TAB BAR -->
     <nav class="tabbar">
       <button class="tab active" data-goto="home"><span class="ic">🏠</span>Головна</button>
@@ -216,6 +254,11 @@
       <div class="sheet-handle"></div>
       <div id="sheetContent"></div>
     </div>
+  </div>
+
+  <!-- PHOTO VIEWER -->
+  <div class="photo-viewer" id="photoViewer">
+    <img id="photoViewerImg" alt="чек">
   </div>
 
   <div class="toast" id="toast"></div>

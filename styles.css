@@ -272,6 +272,58 @@ input, textarea, select { font-family: inherit; }
 }
 .btn-danger { color: var(--neon-red); border-color: rgba(255,77,109,.4); }
 
+/* ---------- Photo of receipt ---------- */
+.photo-btn {
+  width: 100%; padding: 15px; border-radius: var(--radius-sm);
+  background: rgba(0,240,255,.06); border: 1.5px dashed rgba(0,240,255,.4);
+  color: var(--neon-cyan); font-size: 15px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.photo-btn:active { background: rgba(0,240,255,.14); }
+.photo-btn .pic { font-size: 20px; }
+.photo-preview { position: relative; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--stroke); }
+.photo-preview img { width: 100%; max-height: 220px; object-fit: cover; display: block; }
+.photo-remove {
+  position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(0,0,0,.65); color: #fff; font-size: 16px; display: grid; place-items: center;
+  backdrop-filter: blur(4px);
+}
+.tx-photo-thumb {
+  width: 100%; max-height: 240px; object-fit: cover; border-radius: var(--radius-sm);
+  border: 1px solid var(--stroke); margin: 4px 0 8px; display: block;
+}
+.photo-viewer {
+  position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.94);
+  display: none; align-items: center; justify-content: center; padding: 16px;
+}
+.photo-viewer.show { display: flex; }
+.photo-viewer img { max-width: 100%; max-height: 100%; border-radius: 12px; }
+
+/* ---------- Receipts queue ---------- */
+.rcp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.rcp-item {
+  position: relative; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--stroke); aspect-ratio: 3/4; background: rgba(255,255,255,.03);
+}
+.rcp-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rcp-item .rcp-del {
+  position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(0,0,0,.65); color: #fff; display: grid; place-items: center; font-size: 13px;
+}
+.rcp-item .rcp-date {
+  position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,.6);
+  font-size: 10px; padding: 3px 6px; color: #fff;
+}
+.pending-card {
+  display: flex; align-items: center; gap: 12px; cursor: pointer;
+  background: linear-gradient(135deg, rgba(155,92,255,.22), rgba(255,177,61,.12));
+}
+.pending-card .pc-ic { font-size: 26px; }
+.pending-card .pc-txt { flex: 1; }
+.pending-card .pc-title { font-size: 15px; font-weight: 700; }
+.pending-card .pc-sub { font-size: 12px; color: var(--txt-dim); margin-top: 2px; }
+.pending-card .pc-arrow { color: var(--neon-amber); font-size: 18px; }
+
 /* ---------- Analytics ---------- */
 .chart-wrap { position: relative; }
 .donut-center {
