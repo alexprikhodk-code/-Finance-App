@@ -143,6 +143,20 @@
     <section class="screen" id="screen-analytics">
       <div class="app-header"><div><h1>Аналітика</h1></div></div>
 
+      <div class="card query-card">
+        <div class="query-row">
+          <input type="text" id="queryInput" placeholder="Спитай: скільки витратив на їжу цього місяця?" enterkeyhint="send">
+          <button class="query-send" id="queryBtn">➤</button>
+        </div>
+        <div class="query-suggest" id="querySuggest">
+          <button class="qchip">Скільки витратив на їжу цього місяця?</button>
+          <button class="qchip">Який залишок по лімітах?</button>
+          <button class="qchip">На що витрачаю найбільше?</button>
+          <button class="qchip">Скільки я заробив цього місяця?</button>
+        </div>
+        <div class="query-answer hidden" id="queryAnswer"></div>
+      </div>
+
       <div class="period-bar" id="periodBar">
         <button class="chip" data-period="day">День</button>
         <button class="chip" data-period="week">Тиждень</button>
@@ -178,6 +192,12 @@
         <canvas id="barCanvas" height="200"></canvas>
         <div id="compareStats"></div>
       </div>
+
+      <div class="section-title">
+        <span>Ліміти по статтях (місяць)</span>
+        <span class="link" id="budgetsJump">Налаштувати →</span>
+      </div>
+      <div class="card" id="budgetsCard"></div>
     </section>
 
     <!-- SETTINGS -->
@@ -198,6 +218,14 @@
         </div>
         <div class="set-row" data-set="import">
           <div class="sr-left"><span class="sr-ic">⬇️</span><div>Імпорт даних<div class="sr-desc">Завантажити чеки / резервну копію</div></div></div>
+          <span class="chev">›</span>
+        </div>
+        <div class="set-row" data-set="budgets">
+          <div class="sr-left"><span class="sr-ic">🎯</span><div>Ліміти по статтях<div class="sr-desc" id="budgetSetCount">Місячні бюджети витрат</div></div></div>
+          <span class="chev">›</span>
+        </div>
+        <div class="set-row" data-set="ai">
+          <div class="sr-left"><span class="sr-ic">🤖</span><div>ШІ-помічник (Claude)<div class="sr-desc" id="aiSetStatus">Відповіді на складні запити</div></div></div>
           <span class="chev">›</span>
         </div>
         <div class="set-row" data-set="categories">

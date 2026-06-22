@@ -299,6 +299,62 @@ input, textarea, select { font-family: inherit; }
 .photo-viewer.show { display: flex; }
 .photo-viewer img { max-width: 100%; max-height: 100%; border-radius: 12px; }
 
+/* ---------- AI / Query ---------- */
+.query-card { background: linear-gradient(135deg, rgba(0,240,255,.10), rgba(155,92,255,.12)); }
+.query-row { display: flex; gap: 8px; align-items: center; }
+.query-row input {
+  flex: 1; background: rgba(0,0,0,.25); border: 1px solid var(--stroke);
+  border-radius: 999px; padding: 13px 16px; color: var(--txt); font-size: 14px;
+  -webkit-user-select: text; user-select: text;
+}
+.query-row input:focus { outline: none; border-color: var(--neon-cyan); }
+.query-send {
+  width: 46px; height: 46px; flex-shrink: 0; border-radius: 50%; font-size: 18px;
+  background: linear-gradient(135deg, var(--neon-cyan), var(--neon-violet)); color: #04040a;
+  box-shadow: 0 4px 16px rgba(0,240,255,.35); display: grid; place-items: center;
+}
+.query-send:active { transform: scale(.94); }
+.query-send:disabled { opacity: .5; }
+.query-suggest { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.qchip {
+  padding: 7px 12px; border-radius: 999px; background: rgba(255,255,255,.05);
+  border: 1px solid var(--stroke); font-size: 12px; color: var(--txt-dim);
+}
+.qchip:active { background: rgba(0,240,255,.15); }
+.query-answer {
+  margin-top: 14px; padding: 14px; border-radius: var(--radius-sm);
+  background: rgba(0,0,0,.28); border: 1px solid var(--stroke);
+  font-size: 14.5px; line-height: 1.55; white-space: pre-wrap;
+}
+.query-answer .qa-badge {
+  display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 6px;
+  margin-bottom: 8px; font-weight: 700; letter-spacing: .5px;
+}
+.qa-badge.local { background: rgba(61,255,158,.15); color: var(--neon-green); }
+.qa-badge.ai { background: rgba(155,92,255,.18); color: var(--neon-violet); }
+.qa-badge.err { background: rgba(255,77,109,.15); color: var(--neon-red); }
+.query-answer .qa-loader { color: var(--txt-dim); }
+
+/* budgets */
+.budget-row { padding: 12px 0; border-bottom: 1px solid var(--stroke); }
+.budget-row:last-child { border-bottom: none; }
+.budget-top { display: flex; justify-content: space-between; align-items: center; font-size: 14px; margin-bottom: 8px; }
+.budget-top .b-name { font-weight: 600; }
+.budget-top .b-val { font-size: 13px; color: var(--txt-dim); }
+.budget-top .b-val b { color: var(--txt); }
+.budget-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; }
+.budget-bar span { display: block; height: 100%; border-radius: 4px; transition: width .4s; }
+.budget-over { color: var(--neon-red) !important; font-weight: 700; }
+.budget-input-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--stroke); }
+.budget-input-row .bi-emoji { font-size: 20px; }
+.budget-input-row .bi-name { flex: 1; font-size: 14px; }
+.budget-input-row input {
+  width: 110px; background: var(--card); border: 1px solid var(--stroke);
+  border-radius: 10px; padding: 9px 12px; color: var(--txt); font-size: 14px; text-align: right;
+  -webkit-user-select: text; user-select: text;
+}
+.budget-input-row input:focus { outline: none; border-color: var(--neon-cyan); }
+
 /* ---------- Receipts queue ---------- */
 .rcp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .rcp-item {

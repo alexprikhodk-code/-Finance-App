@@ -7,6 +7,8 @@ const STORE = {
   cats: 'groshi_custom_cats_v1',
   pin: 'groshi_pin_v1',
   meta: 'groshi_meta_v1',
+  budgets: 'groshi_budgets_v1',
+  ai: 'groshi_ai_v1',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -15,6 +17,8 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 /* ---------- State ---------- */
 let transactions = [];
 let customCats = { expense: [], income: [] };
+let budgets = {};                // { categoryId: monthlyLimit }
+let aiConfig = { key: '', model: 'claude-opus-4-8', enabled: false };
 let state = {
   addType: 'expense',
   addAmount: '0',
@@ -32,9 +36,13 @@ let state = {
 function load() {
   try { transactions = JSON.parse(localStorage.getItem(STORE.tx)) || []; } catch { transactions = []; }
   try { customCats = JSON.parse(localStorage.getItem(STORE.cats)) || { expense: [], income: [] }; } catch {}
+  try { budgets = JSON.parse(localStorage.getItem(STORE.budgets)) || {}; } catch { budgets = {}; }
+  try { aiConfig = { ...aiConfig, ...(JSON.parse(localStorage.getItem(STORE.ai)) || {}) }; } catch {}
 }
 function saveTx() { localStorage.setItem(STORE.tx, JSON.stringify(transactions)); }
 function saveCats() { localStorage.setItem(STORE.cats, JSON.stringify(customCats)); }
+function saveBudgets() { localStorage.setItem(STORE.budgets, JSON.stringify(budgets)); }
+function saveAi() { localStorage.setItem(STORE.ai, JSON.stringify(aiConfig)); }
 
 /* ---------- Photo storage (IndexedDB) ---------- */
 const PhotoDB = {
@@ -598,6 +606,9 @@ function renderAnalytics() {
 
   // comparison
   renderCompare(from, to);
+
+  // budgets overview
+  renderBudgets();
 }
 
 function renderLegend(arr, total) {
@@ -713,6 +724,298 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 /* ============================================================
+   QUERY ENGINE (локальний) + БЮДЖЕТИ + Claude API
+   ============================================================ */
+const CAT_SYN = {
+  food:['їжу','їжа','їжі','їжею','еду','еда','еды','продукт','харч','їст','grocer','супермаркет','атб','сільпо','silpo'],
+  cafe:['каф','ресторан','кав','кофе','coffee','їдальн','піцер','бар ','фастфуд','mcdonald','макдон'],
+  transport:['транспорт','пальн','бензин','палив','таксі','такси','проїзд','метро','автобус','заправ','uber','bolt'],
+  home:['житл','оренд','аренд','квартир','rent','іпотек','ипотек'],
+  utilities:['комунал','світло','газ','electric','електро','опален','інтернет','internet','вод'],
+  health:['здоров','аптек','ліки','медиц','лекарств','лікар','стоматол','врач','клінік'],
+  clothes:['одяг','одежд','взутт','обув','шопінг','кросівк'],
+  fun:['розваг','развлеч','кіно','кино','ігр','игр','відпочинок','концерт','клуб','боулінг'],
+  subs:['підписк','подписк','subscription','netflix','spotify','youtube','apple'],
+  edu:['освіт','навчан','образован','курс','книг','школ','репетит'],
+  travel:['подорож','путешеств','відпустк','відрядж','готел','квит','авіа','booking'],
+  beauty:['крас','салон','перукар','космет','манікюр','барбер','спа'],
+  pets:['тварин','животн','собак','кіт','кот','корм','ветерин'],
+  gifts_out:['подар','gift','презент'],
+  tech:['техн','гаджет','компют','компʼют','ноутбук','телефон','девайс','навушник'],
+  salary:['зарплат','зп','salary','оклад','получк'],
+  freelance:['фриланс','freelance','підробіт','подработ'],
+  business:['бізнес','бизнес','business','виручк','прибуток від'],
+  invest:['інвест','инвест','дивіденд','invest','акці','депозит','відсотк'],
+  gifts_in:['подар','gift'],
+  sale:['продаж','продав','sale','olx','перепрод'],
+  rent_in:['здаю','оренд','аренд','rent'],
+};
+const PERIOD_NAMES = { day:'сьогодні', week:'цього тижня', month:'цього місяця', prevmonth:'минулого місяця', year:'цього року', all:'за весь час' };
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function rangeForKey(key) {
+  if (key === 'prevmonth') { const d = new Date(); d.setMonth(d.getMonth()-1); return periodRange('month', d); }
+  return periodRange(key);
+}
+function matchCategory(text, type = 'expense') {
+  let best = null, bestLen = 0;
+  for (const c of allCats(type)) {
+    const terms = [c.name.toLowerCase(), ...(CAT_SYN[c.id] || [])];
+    for (const t of terms) {
+      if (t && t.length >= 3 && text.includes(t) && t.length > bestLen) { best = c; bestLen = t.length; }
+    }
+  }
+  return best;
+}
+
+function analyzeQuery(q) {
+  const text = ' ' + q.toLowerCase().replace(/[?!.,;]/g, ' ') + ' ';
+  let pkey = 'month';
+  if (/сьогодн|за сьогодні|today/.test(text)) pkey = 'day';
+  else if (/тижд|недел|week/.test(text)) pkey = 'week';
+  else if (/минул\w* місяц|прошл\w* месяц|попередн\w* місяц|за минулий/.test(text)) pkey = 'prevmonth';
+  else if (/ рік|за год| year|цього року/.test(text)) pkey = 'year';
+  else if (/весь час|загалом|взагалі|за весь|all time/.test(text)) pkey = 'all';
+
+  const r = rangeForKey(pkey);
+  const periodName = PERIOD_NAMES[pkey];
+  const txIn = inRange(transactions, r.from, r.to);
+
+  const isIncome = /дохід|доход|заробив|заработа|надійшл|income|отрима|прибут|выручк/.test(text);
+  const isBudget = /ліміт|лимит|перелім|перерасход|перевищ|бюджет|залишок по|остаток по|скільки залиш|сколько остал/.test(text);
+  const isTop = /найбільш|больше всего| топ|на що.*найбільш|top|куди.*(пішл|іде|уход)|основн\w* витрат/.test(text);
+  const isAverage = /середн|средн|average|на день/.test(text);
+  const isCompare = /порівн|сравн|відносно|порівняно|compare|більше чи менше/.test(text);
+  const isBalance = /баланс|сальдо|чистий|накопич|скільки.*(всього|на рахунк|в мене)/.test(text);
+
+  // 1. Ліміти
+  if (isBudget) {
+    const m = periodRange('month');
+    const mtx = inRange(transactions, m.from, m.to).filter(t => t.type === 'expense');
+    const cat = matchCategory(text, 'expense');
+    if (cat) {
+      const limit = budgets[cat.id] || 0;
+      const spent = sum(mtx.filter(t => t.category === cat.id));
+      if (!limit) return { handled: true, answer: `Для статті «${cat.emoji} ${cat.name}» ліміт не встановлено.\nВитрачено цього місяця: ${fmt(spent)}.\nВстановити ліміт: Налаштування → Ліміти по статтях.` };
+      const left = limit - spent;
+      return { handled: true, answer: left >= 0
+        ? `${cat.emoji} ${cat.name}: витрачено ${fmt(spent)} з ${fmt(limit)}.\n✅ Залишок ліміту: ${fmt(left)} (використано ${Math.round(spent/limit*100)}%).`
+        : `${cat.emoji} ${cat.name}: ⚠️ ліміт перевищено!\nВитрачено ${fmt(spent)} з ${fmt(limit)} — перевитрата ${fmt(-left)}.` };
+    }
+    const ids = Object.keys(budgets).filter(id => budgets[id] > 0);
+    if (!ids.length) return { handled: true, answer: 'Ліміти ще не встановлені.\nДодай їх у Налаштування → Ліміти по статтях.' };
+    const lines = ids.map(id => {
+      const c = findCat('expense', id), limit = budgets[id], spent = sum(mtx.filter(t => t.category === id)), left = limit - spent;
+      return left >= 0 ? `${c.emoji} ${c.name}: ${fmt(spent)} / ${fmt(limit)} — залишок ${fmt(left)}`
+                       : `${c.emoji} ${c.name}: ⚠️ ${fmt(spent)} / ${fmt(limit)} — перевитрата ${fmt(-left)}`;
+    });
+    return { handled: true, answer: 'Ліміти цього місяця:\n' + lines.join('\n') };
+  }
+
+  // 2. Порівняння
+  if (isCompare) {
+    const cat = matchCategory(text, 'expense');
+    const m = periodRange('month');
+    const d = new Date(); d.setMonth(d.getMonth()-1); const pm = periodRange('month', d);
+    const cur = sum(inRange(transactions, m.from, m.to).filter(t => t.type === 'expense' && (!cat || t.category === cat.id)));
+    const pre = sum(inRange(transactions, pm.from, pm.to).filter(t => t.type === 'expense' && (!cat || t.category === cat.id)));
+    const diff = cur - pre;
+    const label = cat ? `«${cat.emoji} ${cat.name}»` : 'витрати';
+    const change = diff === 0 ? 'без змін' : (diff > 0 ? 'більше на ' : 'менше на ') + fmt(Math.abs(diff)) + (pre ? ` (${Math.round(Math.abs(diff)/pre*100)}%)` : '');
+    return { handled: true, answer: `${cap(label)}: цього місяця ${fmt(cur)}, минулого ${fmt(pre)}.\nЦе ${change}.` };
+  }
+
+  // 3. Топ витрат
+  if (isTop) {
+    const exp = txIn.filter(t => t.type === 'expense');
+    const groups = {}; exp.forEach(t => groups[t.category] = (groups[t.category] || 0) + t.amount);
+    const arr = Object.entries(groups).map(([id, v]) => ({ c: findCat('expense', id), v })).sort((a, b) => b.v - a.v).slice(0, 5);
+    if (!arr.length) return { handled: true, answer: `Витрат ${periodName} не знайдено.` };
+    return { handled: true, answer: `Найбільші витрати ${periodName}:\n` + arr.map((x, i) => `${i+1}. ${x.c.emoji} ${x.c.name} — ${fmt(x.v)}`).join('\n') };
+  }
+
+  // 4. Середнє
+  if (isAverage) {
+    const cat = matchCategory(text, 'expense');
+    const exp = txIn.filter(t => t.type === 'expense' && (!cat || t.category === cat.id));
+    const total = sum(exp);
+    const days = Math.max(1, Math.round((r.to - r.from) / 86400000) + 1);
+    return { handled: true, answer: (cat ? `«${cat.emoji} ${cat.name}» — ` : 'Витрати ') + `${periodName}: усього ${fmt(total)}, у середньому ${fmt(total/days)}/день.` };
+  }
+
+  // 5. Дохід
+  if (isIncome) {
+    const cat = matchCategory(text, 'income');
+    const list = txIn.filter(t => t.type === 'income' && (!cat || t.category === cat.id));
+    const total = sum(list);
+    return { handled: true, answer: cat ? `Дохід за статтею «${cat.emoji} ${cat.name}» ${periodName}: ${fmt(total)}.` : `Загальний дохід ${periodName}: ${fmt(total)}.` };
+  }
+
+  // 6. Баланс
+  if (isBalance) {
+    const inc = sum(txIn.filter(t => t.type === 'income')), exp = sum(txIn.filter(t => t.type === 'expense'));
+    return { handled: true, answer: `Баланс ${periodName}: ${fmt(inc - exp)}.\nДоходи: ${fmt(inc)} • витрати: ${fmt(exp)}.` };
+  }
+
+  // 7. Витрати (за замовчуванням)
+  const cat = matchCategory(text, 'expense');
+  const isSpend = /витрат|потрат|спустив|spent|израсход|скільки.*(на | за )/.test(text) || cat;
+  if (isSpend) {
+    const list = txIn.filter(t => t.type === 'expense' && (!cat || t.category === cat.id));
+    const total = sum(list);
+    return { handled: true, answer: cat
+      ? `Витрати за статтею «${cat.emoji} ${cat.name}» ${periodName}: ${fmt(total)} (${list.length} оп.).`
+      : `Загальні витрати ${periodName}: ${fmt(total)}.` };
+  }
+
+  return { handled: false, answer: null };
+}
+
+/* ---- Query UI ---- */
+async function runQuery(q) {
+  q = (q || '').trim(); if (!q) return;
+  $('#queryInput').value = q;
+  const ans = analyzeQuery(q);
+  if (ans.handled) { showAnswer(ans.answer, 'local'); return; }
+  if (aiConfig.enabled && aiConfig.key) {
+    showAnswer('Аналізую ваші дані…', 'loading');
+    try { showAnswer(await callClaude(q), 'ai'); }
+    catch (e) { showAnswer('Помилка ШІ-помічника: ' + e.message, 'err'); }
+  } else {
+    showAnswer('Не вдалося розпізнати запит локально. Спробуй переформулювати (напр. «скільки витратив на кафе цього місяця») або підключи ШІ-помічника в Налаштування → ШІ-помічник для будь-яких запитань.', 'err');
+  }
+}
+function showAnswer(text, type) {
+  const el = $('#queryAnswer'); el.classList.remove('hidden');
+  const badges = {
+    local: '<span class="qa-badge local">ЛОКАЛЬНО</span>',
+    ai: '<span class="qa-badge ai">CLAUDE ШІ</span>',
+    loading: '<span class="qa-badge ai">CLAUDE ШІ</span>',
+    err: '<span class="qa-badge err">УВАГА</span>',
+  };
+  el.innerHTML = (badges[type] || '') + (type === 'loading' ? `<div class="qa-loader">⏳ ${esc(text)}</div>` : esc(text));
+}
+$('#queryBtn').addEventListener('click', () => runQuery($('#queryInput').value));
+$('#queryInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runQuery($('#queryInput').value); });
+$('#querySuggest').addEventListener('click', (e) => { const b = e.target.closest('.qchip'); if (b) runQuery(b.textContent); });
+$('#budgetsJump').addEventListener('click', openBudgetsSheet);
+
+/* ---- Claude API ---- */
+function buildFinanceContext() {
+  const catName = {};
+  ['expense','income'].forEach(tp => allCats(tp).forEach(c => catName[c.id] = c.name));
+  return {
+    today: todayYmd(), currency: 'UAH (₴)',
+    budgets_monthly: budgets,
+    transactions: transactions.map(t => ({
+      date: t.date, type: t.type === 'income' ? 'дохід' : 'витрата',
+      category: findCat(t.type, t.category).name, amount: t.amount, note: t.note || undefined,
+    })),
+  };
+}
+async function callClaude(q) {
+  if (!aiConfig.key) throw new Error('немає API-ключа');
+  const system = `Ти — фінансовий помічник у застосунку «Гроші». Сьогодні ${todayYmd()}. `
+    + `Відповідай українською, стисло й конкретно, з числами у гривнях (₴). `
+    + `Використовуй ВИКЛЮЧНО надані дані операцій. Якщо даних бракує — так і скажи, не вигадуй. `
+    + `Дай одразу готову відповідь без розмірковувань уголос.`;
+  const userContent = `Дані користувача (JSON):\n${JSON.stringify(buildFinanceContext())}\n\nЗапитання: ${q}`;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': aiConfig.key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: aiConfig.model || 'claude-opus-4-8',
+      max_tokens: 1024,
+      thinking: { type: 'disabled' },
+      system,
+      messages: [{ role: 'user', content: userContent }],
+    }),
+  });
+  if (!res.ok) {
+    let msg = res.status + '';
+    try { const j = await res.json(); msg = (j.error && j.error.message) || msg; } catch {}
+    if (res.status === 401) msg = 'невірний API-ключ';
+    throw new Error(msg);
+  }
+  const j = await res.json();
+  const txt = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+  return txt || '(порожня відповідь)';
+}
+
+/* ---- Budgets ---- */
+function openBudgetsSheet() {
+  const cats = allCats('expense');
+  sheet(`<h3>Ліміти по статтях (місяць)</h3>
+    <p style="color:var(--txt-dim);font-size:13px;margin-top:-8px;">Скільки максимум готовий витрачати щомісяця. Залиш порожнім — без ліміту.</p>
+    <div id="budgetInputs" style="max-height:48vh;overflow:auto;">${cats.map(c =>
+      `<div class="budget-input-row"><span class="bi-emoji">${c.emoji}</span><span class="bi-name">${esc(c.name)}</span>
+       <input type="number" inputmode="decimal" data-bid="${c.id}" value="${budgets[c.id] || ''}" placeholder="0 ₴"></div>`).join('')}</div>
+    <button class="btn-primary" id="saveBudgetsBtn" style="margin-top:16px;">Зберегти ліміти</button>`);
+  $('#saveBudgetsBtn').addEventListener('click', () => {
+    const nb = {};
+    $$('#budgetInputs input').forEach(i => { const v = parseFloat(i.value); if (v > 0) nb[i.dataset.bid] = v; });
+    budgets = nb; saveBudgets(); closeSheet(); toast('Ліміти збережено');
+    renderStats(); if ($('.screen.active').id === 'screen-analytics') renderBudgets();
+  });
+}
+function renderBudgets() {
+  const card = $('#budgetsCard');
+  const ids = Object.keys(budgets).filter(id => budgets[id] > 0);
+  if (!ids.length) { card.innerHTML = `<div class="empty" style="padding:12px;">Ліміти не встановлені.<br>Натисни «Налаштувати», щоб задати місячні бюджети.</div>`; return; }
+  const m = periodRange('month');
+  const mtx = inRange(transactions, m.from, m.to).filter(t => t.type === 'expense');
+  card.innerHTML = ids.map(id => {
+    const c = findCat('expense', id), limit = budgets[id], spent = sum(mtx.filter(t => t.category === id));
+    const over = spent > limit, ratio = spent / limit, pct = Math.round(ratio * 100);
+    const color = over ? 'var(--neon-red)' : ratio > 0.8 ? 'var(--neon-amber)' : 'var(--neon-green)';
+    return `<div class="budget-row">
+      <div class="budget-top"><span class="b-name">${c.emoji} ${esc(c.name)}</span>
+        <span class="b-val ${over?'budget-over':''}"><b>${fmt(spent)}</b> / ${fmt(limit)}</span></div>
+      <div class="budget-bar"><span style="width:${Math.min(100, ratio*100)}%;background:${color};box-shadow:0 0 8px ${color};"></span></div>
+      <div style="font-size:11px;color:var(--txt-faint);margin-top:4px;">${over ? '⚠️ перевитрата ' + fmt(spent-limit) : 'залишок ' + fmt(limit-spent) + ` • ${pct}%`}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ---- AI settings ---- */
+function openAiSheet() {
+  sheet(`<h3>🤖 ШІ-помічник (Claude)</h3>
+    <p style="color:var(--txt-dim);font-size:13px;line-height:1.55;">Відповідає на будь-які запити в Аналітиці, які не розпізнав локальний движок. Потрібен власний API-ключ Anthropic (console.anthropic.com → API Keys). Ключ зберігається ЛИШЕ на цьому пристрої й надсилається напряму до Anthropic.</p>
+    <div class="field"><label>API-ключ Anthropic</label><input type="password" id="aiKey" placeholder="sk-ant-..." value="${esc(aiConfig.key || '')}"></div>
+    <div class="field"><label>Модель</label>
+      <select id="aiModel">
+        <option value="claude-opus-4-8">Opus 4.8 — найрозумніша</option>
+        <option value="claude-sonnet-4-6">Sonnet 4.6 — баланс</option>
+        <option value="claude-haiku-4-5">Haiku 4.5 — швидша й дешевша</option>
+      </select></div>
+    <div class="set-row"><div class="sr-left"><span class="sr-ic">⚡</span><div>Увімкнути ШІ-помічника</div></div>
+      <input type="checkbox" id="aiEnabled" ${aiConfig.enabled ? 'checked' : ''} style="width:24px;height:24px;accent-color:#9b5cff;"></div>
+    <button class="btn-primary" id="saveAiBtn" style="margin-top:16px;">Зберегти</button>
+    <button class="btn-secondary" id="testAiBtn" style="margin-top:10px;">Перевірити підключення</button>`);
+  $('#aiModel').value = aiConfig.model || 'claude-opus-4-8';
+  $('#saveAiBtn').addEventListener('click', () => {
+    aiConfig.key = $('#aiKey').value.trim();
+    aiConfig.model = $('#aiModel').value;
+    aiConfig.enabled = $('#aiEnabled').checked;
+    saveAi(); closeSheet(); toast('Налаштування ШІ збережено'); renderStats();
+  });
+  $('#testAiBtn').addEventListener('click', async () => {
+    const k = $('#aiKey').value.trim(); if (!k) { toast('Спершу введіть ключ'); return; }
+    const prev = { ...aiConfig };
+    aiConfig.key = k; aiConfig.model = $('#aiModel').value;
+    toast('Перевірка підключення…');
+    try { await callClaude('Відповідай одним словом: працює?'); toast('✅ Підключення працює'); }
+    catch (e) { toast('❌ ' + e.message.slice(0, 50)); }
+    aiConfig = prev;
+  });
+}
+
+/* ============================================================
    TRANSACTION SHEET (view / delete)
    ============================================================ */
 function openTxSheet(id) {
@@ -818,6 +1121,8 @@ $$('[data-set]').forEach(r => r.addEventListener('click', () => {
   else if (action === 'export') exportData();
   else if (action === 'import') $('#importFile').click();
   else if (action === 'receipts') goto('receipts');
+  else if (action === 'budgets') openBudgetsSheet();
+  else if (action === 'ai') openAiSheet();
   else if (action === 'categories') openCategorySheet();
   else if (action === 'clear') confirmClear();
 }));
@@ -830,13 +1135,17 @@ function renderStats() {
   PhotoDB.countPending().then(c => {
     $('#rcpSetCount').textContent = c ? `${c} у черзі на розпізнавання` : 'Фото чеків у черзі';
   });
+  const bc = Object.keys(budgets).filter(id => budgets[id] > 0).length;
+  $('#budgetSetCount').textContent = bc ? `${bc} статей з лімітом` : 'Місячні бюджети витрат';
+  $('#aiSetStatus').textContent = (aiConfig.enabled && aiConfig.key)
+    ? `Увімкнено • ${(aiConfig.model || '').replace('claude-','')}` : 'Вимкнено — для складних запитів';
 }
 
 async function exportData() {
   toast('Готую копію…');
   let photos = {};
   try { photos = await PhotoDB.all(); } catch {}
-  const data = { app: 'groshi', version: 1, exportedAt: new Date().toISOString(), transactions, customCats, photos };
+  const data = { app: 'groshi', version: 1, exportedAt: new Date().toISOString(), transactions, customCats, budgets, photos };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -877,6 +1186,7 @@ function importData(data) {
     });
     saveCats();
   }
+  if (data.budgets && typeof data.budgets === 'object') { budgets = { ...budgets, ...data.budgets }; saveBudgets(); }
 
   // асинхронно: прикріпити фото з черги розпізнавання + відновити фото з бекапу
   (async () => {
