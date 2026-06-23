@@ -20,7 +20,7 @@ let transactions = [];
 let customCats = { expense: [], income: [] };
 let budgets = {};                // { categoryId: monthlyLimit }
 let aiConfig = { key: '', model: 'claude-opus-4-8', enabled: false };
-let goal = { name: 'Авто', target: 30000, saved: 0 };
+let goal = { name: 'Авто', target: 30000, saved: 0, deadline: '2027-04-01' };
 let state = {
   addType: 'expense',
   addAmount: '0',
@@ -307,21 +307,53 @@ function showWisdom() {
   $('#wisdomAuthor').textContent = '— ' + w.a;
 }
 
+function monthsUntil(dateStr) {
+  if (!dateStr) return 0;
+  const now = new Date(); now.setHours(0,0,0,0);
+  const d = parseYmd(dateStr);
+  let m = (d.getFullYear() - now.getFullYear()) * 12 + (d.getMonth() - now.getMonth());
+  if (d.getDate() < now.getDate()) m -= 1; // поточний місяць ще не «закрився»
+  return m;
+}
+function fmtDate(dateStr) {
+  const d = parseYmd(dateStr);
+  return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
+}
 function updateGoalCard() {
   const saved = goal.saved || 0, target = goal.target || 0;
   $('#goalName').textContent = goal.name || 'Накопичення';
   $('#goalSaved').textContent = fmt(saved);
   $('#goalTarget').textContent = fmt(target);
   const ratio = target > 0 ? Math.min(1, saved / target) : 0;
+  const pct = Math.round(ratio * 100);
   $('#goalBarFill').style.width = (ratio * 100) + '%';
+  $('#goalPct').textContent = pct + '%';
+
   const remainEl = $('#goalRemain');
+  const monthlyEl = $('#goalMonthly');
   const left = target - saved;
+
   if (target > 0 && left <= 0) {
     remainEl.classList.add('done');
-    remainEl.innerHTML = `🎉 Ціль досягнута! Накопичено ${fmt(saved)} (${Math.round(ratio*100)}%)`;
+    remainEl.innerHTML = `🎉 Ціль досягнута! Накопичено ${fmt(saved)} (${pct}%)`;
+    monthlyEl.innerHTML = ''; monthlyEl.classList.remove('warn');
+    return;
+  }
+  remainEl.classList.remove('done');
+  remainEl.innerHTML = `Залишилось зібрати: <b>${fmt(left)}</b>`;
+
+  if (target > 0 && goal.deadline) {
+    const m = monthsUntil(goal.deadline);
+    if (m <= 0) {
+      monthlyEl.classList.add('warn');
+      monthlyEl.innerHTML = `⏰ До ${fmtDate(goal.deadline)} лишився <b>1 міс. або менше</b> — треба ще ${fmt(left)}`;
+    } else {
+      monthlyEl.classList.remove('warn');
+      monthlyEl.innerHTML = `📅 Відкладати щомісяця: <b>${fmt(left / m)}</b><br>`
+        + `<span class="gm-sub">до ${fmtDate(goal.deadline)} • залишилось ${m} міс.</span>`;
+    }
   } else {
-    remainEl.classList.remove('done');
-    remainEl.innerHTML = `Залишилось зібрати: <b>${fmt(left)}</b> • ${Math.round(ratio*100)}%`;
+    monthlyEl.innerHTML = ''; monthlyEl.classList.remove('warn');
   }
 }
 function addToGoal() {
@@ -337,12 +369,14 @@ function openGoalSheet() {
     <div class="field"><label>Назва цілі</label><input type="text" id="goalNameInp" maxlength="30" value="${esc(goal.name || '')}" placeholder="Напр. Авто"></div>
     <div class="field"><label>Сума цілі, ₴</label><input type="number" inputmode="decimal" id="goalTargetInp" value="${goal.target || ''}" placeholder="30000"></div>
     <div class="field"><label>Вже накопичено, ₴</label><input type="number" inputmode="decimal" id="goalSavedInp" value="${goal.saved || ''}" placeholder="0"></div>
+    <div class="field"><label>Зібрати до дати</label><input type="date" id="goalDeadlineInp" value="${goal.deadline || ''}"></div>
     <button class="btn-primary" id="saveGoalBtn">Зберегти ціль</button>
     <button class="btn-secondary btn-danger" id="resetGoalBtn" style="margin-top:10px;">Обнулити накопичення</button>`);
   $('#saveGoalBtn').addEventListener('click', () => {
     goal.name = ($('#goalNameInp').value.trim()) || 'Накопичення';
     goal.target = Math.max(0, parseFloat($('#goalTargetInp').value) || 0);
     goal.saved = Math.max(0, parseFloat($('#goalSavedInp').value) || 0);
+    goal.deadline = $('#goalDeadlineInp').value || '';
     saveGoal(); closeSheet(); updateGoalCard(); toast('Ціль збережено');
   });
   $('#resetGoalBtn').addEventListener('click', () => {

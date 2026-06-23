@@ -117,6 +117,37 @@ input, textarea, select { font-family: inherit; }
   opacity: .6;
 }
 
+/* ---------- Goal ---------- */
+.goal-card { background: linear-gradient(135deg, rgba(61,255,158,.14), rgba(0,240,255,.10)); }
+.goal-head { display: flex; justify-content: space-between; align-items: center; }
+.goal-title { font-size: 15px; font-weight: 700; }
+.goal-edit { width: 32px; height: 32px; border-radius: 10px; background: rgba(255,255,255,.06); border: 1px solid var(--stroke); font-size: 14px; }
+.goal-amounts { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 10px; }
+.goal-saved { font-size: 28px; font-weight: 800; color: var(--neon-green); letter-spacing: -.5px; }
+.goal-target { font-size: 14px; color: var(--txt-dim); }
+.goal-bar { position: relative; height: 22px; border-radius: 11px; background: rgba(255,255,255,.08); overflow: hidden; }
+.goal-bar span { display: block; height: 100%; width: 0; border-radius: 11px; background: linear-gradient(90deg, #2fe07f, #3dff9e); box-shadow: 0 0 12px rgba(61,255,158,.6); transition: width .55s ease; }
+.goal-bar b { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); letter-spacing: .3px; }
+.goal-remain { font-size: 13px; color: var(--txt-dim); margin-top: 10px; }
+.goal-remain b { color: var(--txt); }
+.goal-remain.done { color: var(--neon-green); font-weight: 700; }
+.goal-monthly { font-size: 13px; color: var(--neon-cyan); margin-top: 7px; line-height: 1.5; }
+.goal-monthly b { font-size: 16px; font-weight: 800; }
+.goal-monthly .gm-sub { color: var(--txt-faint); font-size: 11.5px; }
+.goal-monthly.warn { color: var(--neon-amber); }
+.goal-add { display: flex; gap: 8px; margin-top: 14px; }
+.goal-add input {
+  flex: 1; background: rgba(0,0,0,.25); border: 1px solid var(--stroke);
+  border-radius: 12px; padding: 12px 14px; color: var(--txt); font-size: 15px;
+  -webkit-user-select: text; user-select: text;
+}
+.goal-add input:focus { outline: none; border-color: var(--neon-green); }
+.goal-add-btn {
+  flex-shrink: 0; padding: 12px 18px; border-radius: 12px; font-weight: 700; font-size: 14px;
+  background: linear-gradient(135deg, var(--neon-green), var(--neon-cyan)); color: #04140a;
+}
+.goal-add-btn:active { transform: scale(.97); }
+
 /* ---------- Wisdom ---------- */
 .wisdom {
   text-align: center;
