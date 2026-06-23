@@ -181,12 +181,16 @@
         <button class="chip active" data-period="month">Місяць</button>
         <button class="chip" data-period="year">Рік</button>
         <button class="chip" data-period="all">Весь час</button>
-        <button class="chip" data-period="custom">Період…</button>
+        <button class="chip" data-period="custom">📅 Свій період</button>
       </div>
 
       <div class="card hidden" id="customRangeCard">
-        <div class="field"><label>Від</label><input type="date" id="customFrom"></div>
-        <div class="field" style="margin-bottom:0;"><label>До</label><input type="date" id="customTo"></div>
+        <div style="font-weight:700;font-size:14px;margin-bottom:10px;">📅 Свій період</div>
+        <div style="display:flex;gap:10px;">
+          <div class="field" style="flex:1;margin-bottom:0;"><label>Від</label><input type="date" id="customFrom"></div>
+          <div class="field" style="flex:1;margin-bottom:0;"><label>До</label><input type="date" id="customTo"></div>
+        </div>
+        <div id="customRangeInfo" style="font-size:12px;color:var(--neon-cyan);margin-top:10px;"></div>
       </div>
 
       <div class="seg" id="ioSeg">

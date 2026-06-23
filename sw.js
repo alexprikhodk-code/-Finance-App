@@ -1,5 +1,5 @@
 /* Service worker — офлайн-кеш */
-const CACHE = 'groshi-v7';
+const CACHE = 'groshi-v8';
 const ASSETS = [
   './',
   './index.html',

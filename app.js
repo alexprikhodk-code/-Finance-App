@@ -673,6 +673,10 @@ $('#ioSeg').addEventListener('click', (e) => {
 
 function renderAnalytics() {
   const { from, to } = periodRange(state.analyticsPeriod);
+  if (state.analyticsPeriod === 'custom') {
+    const days = Math.max(1, Math.round((to - from) / 86400000) + 1);
+    $('#customRangeInfo').textContent = `З ${fmtDate(ymd(from))} по ${fmtDate(ymd(to))} • ${days} дн.`;
+  }
   const tx = inRange(transactions, from, to).filter(t => t.type === state.analyticsIO);
   const total = sum(tx);
 
@@ -1006,31 +1010,41 @@ async function callClaude(q) {
     + `Використовуй ВИКЛЮЧНО надані дані операцій. Якщо даних бракує — так і скажи, не вигадуй. `
     + `Дай одразу готову відповідь без розмірковувань уголос.`;
   const userContent = `Дані користувача (JSON):\n${JSON.stringify(buildFinanceContext())}\n\nЗапитання: ${q}`;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': aiConfig.key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: aiConfig.model || 'claude-opus-4-8',
-      max_tokens: 1024,
-      thinking: { type: 'disabled' },
-      system,
-      messages: [{ role: 'user', content: userContent }],
-    }),
+  const body = JSON.stringify({
+    model: aiConfig.model || 'claude-opus-4-8',
+    max_tokens: 1024,
+    thinking: { type: 'disabled' },
+    system,
+    messages: [{ role: 'user', content: userContent }],
   });
-  if (!res.ok) {
-    let msg = res.status + '';
-    try { const j = await res.json(); msg = (j.error && j.error.message) || msg; } catch {}
-    if (res.status === 401) msg = 'невірний API-ключ';
-    throw new Error(msg);
+  const headers = {
+    'content-type': 'application/json',
+    'x-api-key': aiConfig.key,
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  };
+  const retryable = new Set([429, 500, 502, 503, 529]);
+  let lastErr = 'не вдалося звʼязатися';
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 800 * (2 ** (attempt - 1)))); // 0.8 / 1.6 / 3.2 с
+    let res;
+    try {
+      res = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body });
+    } catch { lastErr = 'немає зʼєднання з мережею'; continue; }
+    if (res.ok) {
+      const j = await res.json();
+      const txt = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+      return txt || '(порожня відповідь)';
+    }
+    let detail = '';
+    try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch {}
+    if (res.status === 401) throw new Error('невірний API-ключ');
+    if (res.status === 400) throw new Error('некоректний запит: ' + detail.slice(0, 80));
+    if (res.status === 402 || /credit|balance|insufficient/i.test(detail)) throw new Error('недостатньо коштів на балансі Anthropic');
+    if (!retryable.has(res.status)) throw new Error(detail.slice(0, 80) || ('помилка ' + res.status));
+    lastErr = (res.status === 529 || /overload/i.test(detail)) ? 'сервери Claude перевантажені' : ('тимчасова помилка ' + res.status);
   }
-  const j = await res.json();
-  const txt = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-  return txt || '(порожня відповідь)';
+  throw new Error(lastErr + ' — спробуй ще раз за хвилину');
 }
 
 /* ---- Budgets ---- */
